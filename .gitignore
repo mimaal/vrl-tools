@@ -13,3 +13,6 @@ pkg/
 # OS
 .DS_Store
 Thumbs.db
+
+# Cygwin/MSYS crash dumps
+*.stackdump

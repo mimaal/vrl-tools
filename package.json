@@ -1,0 +1,24 @@
+{
+  "name": "vrl-tools-monorepo",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Monorepo root for vrl-tools. The publishable extension lives in editors/vscode.",
+  "license": "MIT",
+  "workspaces": [
+    "editors/vscode"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "gen:grammar": "tsx scripts/gen-grammar.ts",
+    "compile": "npm run compile --workspace editors/vscode",
+    "build": "npm run gen:grammar && npm run compile",
+    "watch": "npm run watch --workspace editors/vscode"
+  },
+  "devDependencies": {
+    "tar": "^7.4.3",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

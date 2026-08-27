@@ -1,0 +1,59 @@
+{
+  "name": "vrl-tools",
+  "displayName": "VRL Tools",
+  "description": "Syntax highlighting and real compiler diagnostics for VRL (Vector Remap Language).",
+  "version": "0.0.1",
+  "license": "MIT",
+  "publisher": "miguel-martinez",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/miguel-martinez/vrl-tools"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "keywords": [
+    "vrl",
+    "vector",
+    "vector.dev",
+    "remap",
+    "observability"
+  ],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "languages": [
+      {
+        "id": "vrl",
+        "aliases": [
+          "VRL",
+          "Vector Remap Language"
+        ],
+        "extensions": [
+          ".vrl"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "vrl",
+        "scopeName": "source.vrl",
+        "path": "./syntaxes/vrl.tmLanguage.json"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -p . --watch"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.10",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.7.2"
+  }
+}
