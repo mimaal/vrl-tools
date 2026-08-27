@@ -1,0 +1,15 @@
+# Node / VS Code extension
+node_modules/
+out/
+*.vsix
+.vscode-test/
+
+# Rust
+target/
+
+# wasm-pack output
+pkg/
+
+# OS
+.DS_Store
+Thumbs.db

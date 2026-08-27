@@ -1,0 +1,41 @@
+# vrl-tools
+
+VS Code extension for VRL (Vector Remap Language) from Vector.dev.
+Free and open source. Full phased plan lives in @docs/PLAN.md.
+
+## Settled decisions (don't reopen without discussing)
+
+- Diagnostics use the REAL VRL compiler via the `vrl` crate, compiled to WASM.
+  Never heuristics or regex for semantic validation.
+- Core lives in `crates/vrl-check-core`, knowing nothing about WASM or VS Code,
+  so it can be wrapped in an LSP server later.
+- Monorepo: `crates/` for Rust, `editors/vscode` for the extension.
+- The `vrl` crate version is pinned exactly (`0.52.0`) and surfaced in the
+  status bar.
+
+## Working rules
+
+- NEVER hand-write stdlib function lists. Generate them at build time from
+  `vrl::stdlib::all()` and `docs/generated` in the VRL repo.
+- Compiler spans are BYTE offsets. VS Code expects UTF-16 columns. All
+  conversion goes through the shared helper and is covered by tests with
+  accented characters, CJK, and astral-plane emoji.
+- Before using any `vrl` crate API, verify the signature on docs.rs for the
+  pinned version. The crate surface still changes.
+
+## Verification
+
+- `cargo test` across the workspace before closing out a phase.
+- Test the extension against the real parsers in `test-corpus/`, never against
+  toy examples.
+
+## Communication
+
+- Reply to me in Spanish.
+
+## Verification
+
+- `cargo test` across the workspace before closing out a phase.
+- Test corpus is generated from the `vrl` crate's stdlib examples at test time,
+  plus synthetic parsers in `test-corpus/` built on public log formats.
+  Never commit real-world parsers or sample logs from any third party.
