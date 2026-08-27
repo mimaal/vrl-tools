@@ -11,8 +11,8 @@ heuristics. If `vector validate` would reject your program, so will this.
 
 | Phase | Feature | Status |
 |---|---|---|
-| 0 | Extension scaffolding, language registration | in progress |
-| 1 | TextMate grammar + language configuration | in progress |
+| 0 | Extension scaffolding, language registration | done |
+| 1 | TextMate grammar + language configuration | done |
 | 2 | Snippets, VRL injection into Vector YAML/TOML configs | not started |
 | 3 | Real compiler diagnostics via WASM | not started |
 | 4 | Hover, completion and signature help, generated from the stdlib | not started |
@@ -21,8 +21,23 @@ heuristics. If `vector validate` would reject your program, so will this.
 ## Status
 
 Early development. Nothing is published to the Marketplace yet and there is no
-installable `.vsix`. Phases 0 and 1 are being built now; the extension is not
-usable for real work until phase 2.
+installable `.vsix`. Highlighting works; diagnostics do not exist yet.
+
+Pinned to the `vrl` crate `0.29.0`, which is what Vector 0.52.0 depends on.
+
+## Development
+
+```sh
+npm install
+npm run build        # generate the grammar, then compile the extension
+npm test             # tokenise VRL through vscode-textmate and assert scopes
+```
+
+Then press `F5` in VS Code to open an Extension Development Host with
+`test-corpus/` loaded.
+
+The grammar is generated. Edit `syntaxes/vrl.tmLanguage.template.json` and run
+`npm run gen:grammar`; never edit `vrl.tmLanguage.json` by hand.
 
 ## Design notes
 
