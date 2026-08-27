@@ -16,3 +16,6 @@ Thumbs.db
 
 # Cygwin/MSYS crash dumps
 *.stackdump
+
+# Generator download cache
+.cache/

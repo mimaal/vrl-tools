@@ -14,11 +14,19 @@
     "gen:grammar": "tsx scripts/gen-grammar.ts",
     "compile": "npm run compile --workspace editors/vscode",
     "build": "npm run gen:grammar && npm run compile",
-    "watch": "npm run watch --workspace editors/vscode"
+    "watch": "npm run watch --workspace editors/vscode",
+    "test:grammar": "tsx scripts/test-grammar.ts",
+    "test": "npm run test:grammar"
   },
   "devDependencies": {
     "tar": "^7.4.3",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.3.2"
+  },
+  "vrl": {
+    "crateVersion": "0.29.0",
+    "vectorRelease": "0.52.0"
   }
 }

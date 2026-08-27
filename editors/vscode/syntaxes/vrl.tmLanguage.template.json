@@ -1,0 +1,305 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "VRL",
+  "scopeName": "source.vrl",
+  "fileTypes": ["vrl"],
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#strings" },
+    { "include": "#closure-params" },
+    { "include": "#destructuring" },
+    { "include": "#keywords" },
+    { "include": "#numbers" },
+    { "include": "#metadata-path" },
+    { "include": "#event-path" },
+    { "include": "#root-path" },
+    { "include": "#variable-path" },
+    { "include": "#function-call" },
+    { "include": "#assignment" },
+    { "include": "#operators" },
+    { "include": "#punctuation" },
+    { "include": "#identifier" }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.line.number-sign.vrl",
+      "begin": "#",
+      "beginCaptures": { "0": { "name": "punctuation.definition.comment.vrl" } },
+      "end": "$"
+    },
+
+    "strings": {
+      "patterns": [
+        { "include": "#string-regex" },
+        { "include": "#string-raw" },
+        { "include": "#string-timestamp" },
+        { "include": "#string-double" }
+      ]
+    },
+
+    "string-double": {
+      "name": "string.quoted.double.vrl",
+      "begin": "\"",
+      "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.vrl" } },
+      "end": "\"",
+      "endCaptures": { "0": { "name": "punctuation.definition.string.end.vrl" } },
+      "patterns": [
+        { "include": "#string-escape" },
+        { "include": "#interpolation" }
+      ]
+    },
+
+    "string-escape": {
+      "name": "constant.character.escape.vrl",
+      "match": "\\\\(?:u\\{[0-9A-Fa-f]{1,6}\\}|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|.)"
+    },
+
+    "interpolation": {
+      "name": "meta.embedded.line.vrl",
+      "begin": "\\{\\{",
+      "beginCaptures": { "0": { "name": "punctuation.section.embedded.begin.vrl" } },
+      "end": "\\}\\}",
+      "endCaptures": { "0": { "name": "punctuation.section.embedded.end.vrl" } },
+      "patterns": [
+        { "include": "#metadata-path" },
+        { "include": "#event-path" },
+        { "include": "#root-path" },
+        { "include": "#identifier" }
+      ]
+    },
+
+    "string-raw": {
+      "name": "string.quoted.single.raw.vrl",
+      "begin": "s'",
+      "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.vrl" } },
+      "end": "'",
+      "endCaptures": { "0": { "name": "punctuation.definition.string.end.vrl" } },
+      "patterns": [
+        { "name": "constant.character.escape.vrl", "match": "\\\\'" }
+      ]
+    },
+
+    "string-regex": {
+      "name": "string.regexp.vrl",
+      "begin": "r'",
+      "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.vrl" } },
+      "end": "'",
+      "endCaptures": { "0": { "name": "punctuation.definition.string.end.vrl" } },
+      "patterns": [
+        { "name": "constant.character.escape.regexp.vrl", "match": "\\\\." },
+        { "name": "keyword.operator.quantifier.regexp.vrl", "match": "[*+?]|\\{[0-9]*(?:,[0-9]*)?\\}" },
+        { "name": "keyword.operator.or.regexp.vrl", "match": "\\|" },
+        { "name": "keyword.control.anchor.regexp.vrl", "match": "[\\^$]" },
+        {
+          "name": "constant.other.character-class.set.regexp.vrl",
+          "begin": "\\[",
+          "beginCaptures": { "0": { "name": "punctuation.definition.character-class.regexp.vrl" } },
+          "end": "\\]",
+          "endCaptures": { "0": { "name": "punctuation.definition.character-class.regexp.vrl" } },
+          "patterns": [
+            { "name": "constant.character.escape.regexp.vrl", "match": "\\\\." }
+          ]
+        },
+        { "name": "meta.group.regexp.vrl", "match": "[()]" }
+      ]
+    },
+
+    "string-timestamp": {
+      "name": "constant.other.timestamp.vrl",
+      "begin": "t'",
+      "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.vrl" } },
+      "end": "'",
+      "endCaptures": { "0": { "name": "punctuation.definition.string.end.vrl" } }
+    },
+
+    "keywords": {
+      "patterns": [
+        { "name": "keyword.control.vrl", "match": "\\b(?:if|else|abort|return)\\b" },
+        { "name": "constant.language.vrl", "match": "\\b(?:true|false|null)\\b" }
+      ]
+    },
+
+    "numbers": {
+      "patterns": [
+        {
+          "comment": "Float first, so the dot of 3.14 is never offered to the path rule.",
+          "name": "constant.numeric.float.vrl",
+          "match": "(?<![A-Za-z0-9_.)\\]])-?\\b[0-9][0-9_]*\\.[0-9][0-9_]*\\b"
+        },
+        {
+          "name": "constant.numeric.integer.vrl",
+          "match": "(?<![A-Za-z0-9_.)\\]])-?\\b[0-9][0-9_]*\\b(?!\\.[0-9])"
+        }
+      ]
+    },
+
+    "metadata-path": {
+      "name": "variable.other.metadata.vrl",
+      "begin": "%(?=[A-Za-z_\"\\[(])",
+      "beginCaptures": { "0": { "name": "punctuation.definition.metadata.vrl" } },
+      "end": "(?=[^A-Za-z0-9_.\"\\[(])|$",
+      "patterns": [{ "include": "#path-body" }]
+    },
+
+    "event-path": {
+      "comment": "The lookbehind keeps this off decimal points and off a dot that follows a closing bracket.",
+      "name": "variable.other.property.vrl",
+      "begin": "(?<![A-Za-z0-9_)\\]}\"'])\\.(?=[A-Za-z_\"\\[(])",
+      "beginCaptures": { "0": { "name": "punctuation.accessor.vrl" } },
+      "end": "(?=[^A-Za-z0-9_.\"\\[(])|$",
+      "patterns": [{ "include": "#path-body" }]
+    },
+
+    "root-path": {
+      "name": "variable.language.vrl",
+      "match": "(?<![A-Za-z0-9_)\\]}\"'])\\.(?![A-Za-z0-9_\"\\[(])"
+    },
+
+    "variable-path": {
+      "comment": "Member access on a variable, e.g. fields.client. Requires an identifier start after the dot, which is what keeps 3.14 out.",
+      "name": "variable.other.property.vrl",
+      "begin": "(?<=[A-Za-z0-9_)\\]}])\\.(?=[A-Za-z_\"\\[])",
+      "beginCaptures": { "0": { "name": "punctuation.accessor.vrl" } },
+      "end": "(?=[^A-Za-z0-9_.\"\\[(])|$",
+      "patterns": [{ "include": "#path-body" }]
+    },
+
+    "path-body": {
+      "patterns": [
+        {
+          "comment": "Quoted segment, e.g. .\"@timestamp\" — very common in ECS logs.",
+          "name": "variable.other.property.quoted.vrl",
+          "begin": "\"",
+          "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.vrl" } },
+          "end": "\"",
+          "endCaptures": { "0": { "name": "punctuation.definition.string.end.vrl" } },
+          "patterns": [{ "include": "#string-escape" }]
+        },
+        {
+          "comment": "Path coalescence, e.g. .foo.(a | b)",
+          "begin": "\\(",
+          "beginCaptures": { "0": { "name": "punctuation.section.coalesce.begin.vrl" } },
+          "end": "\\)",
+          "endCaptures": { "0": { "name": "punctuation.section.coalesce.end.vrl" } },
+          "patterns": [
+            { "name": "keyword.operator.coalesce.path.vrl", "match": "\\|" },
+            {
+              "name": "variable.other.property.quoted.vrl",
+              "begin": "\"",
+              "end": "\"",
+              "patterns": [{ "include": "#string-escape" }]
+            },
+            { "name": "variable.other.property.vrl", "match": "[A-Za-z_][A-Za-z0-9_]*" }
+          ]
+        },
+        {
+          "comment": "Index, e.g. .list[0] or .[\"a-b\"]",
+          "begin": "\\[",
+          "beginCaptures": { "0": { "name": "punctuation.definition.index.begin.vrl" } },
+          "end": "\\]",
+          "endCaptures": { "0": { "name": "punctuation.definition.index.end.vrl" } },
+          "patterns": [
+            { "name": "constant.numeric.integer.vrl", "match": "-?[0-9]+" },
+            {
+              "name": "variable.other.property.quoted.vrl",
+              "begin": "\"",
+              "end": "\"",
+              "patterns": [{ "include": "#string-escape" }]
+            }
+          ]
+        },
+        { "name": "punctuation.accessor.vrl", "match": "\\." },
+        { "name": "variable.other.property.vrl", "match": "[A-Za-z_][A-Za-z0-9_]*" }
+      ]
+    },
+
+    "closure-params": {
+      "comment": "Closure parameters, e.g. for_each(.obj) -> |k, v| { ... }",
+      "begin": "(->)\\s*(\\|)",
+      "beginCaptures": {
+        "1": { "name": "keyword.operator.arrow.vrl" },
+        "2": { "name": "punctuation.definition.parameters.begin.vrl" }
+      },
+      "end": "\\|",
+      "endCaptures": { "0": { "name": "punctuation.definition.parameters.end.vrl" } },
+      "patterns": [
+        { "name": "variable.parameter.vrl", "match": "[A-Za-z_][A-Za-z0-9_]*" },
+        { "name": "punctuation.separator.parameter.vrl", "match": "," }
+      ]
+    },
+
+    "destructuring": {
+      "comment": "Error destructuring, e.g. x, err = parse_json(.message)",
+      "match": "(,)\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(?==(?!=))",
+      "captures": {
+        "1": { "name": "punctuation.separator.destructuring.vrl" },
+        "2": { "name": "variable.other.error.vrl" }
+      }
+    },
+
+    "assignment": {
+      "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=(?:\\|\\|)?=(?!=))",
+      "captures": {
+        "1": { "name": "variable.other.assignment.vrl" }
+      }
+    },
+
+    "function-call": {
+      "patterns": [
+        {
+          "comment": "Stdlib call in fallible-suppressing form: the ! belongs to the name, not to negation.",
+          "match": "\\b(__VRL_STDLIB_FUNCTIONS__)(!)(?=\\s*\\()",
+          "captures": {
+            "1": { "name": "support.function.vrl" },
+            "2": { "name": "keyword.operator.fallible.vrl" }
+          }
+        },
+        {
+          "comment": "Plain stdlib call.",
+          "match": "\\b(__VRL_STDLIB_FUNCTIONS__)\\b(?=\\s*\\()",
+          "captures": {
+            "1": { "name": "support.function.vrl" }
+          }
+        },
+        {
+          "comment": "Any other call: user closures, or functions added after the pinned crate version.",
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)(!)?(?=\\s*\\()",
+          "captures": {
+            "1": { "name": "entity.name.function.vrl" },
+            "2": { "name": "keyword.operator.fallible.vrl" }
+          }
+        }
+      ]
+    },
+
+    "operators": {
+      "patterns": [
+        { "name": "keyword.operator.coalesce.vrl", "match": "\\?\\?" },
+        { "name": "keyword.operator.arrow.vrl", "match": "->" },
+        { "name": "keyword.operator.comparison.vrl", "match": "==|!=|>=|<=|>|<" },
+        { "name": "keyword.operator.logical.vrl", "match": "&&|\\|\\|" },
+        {
+          "comment": "Negation, e.g. !exists(.x). The lookbehind keeps it off the ! of a fallible call.",
+          "name": "keyword.operator.logical.vrl",
+          "match": "(?<![A-Za-z0-9_])!(?!=)"
+        },
+        { "name": "keyword.operator.assignment.vrl", "match": "(?:\\|\\|)?=(?!=)" },
+        { "name": "keyword.operator.arithmetic.vrl", "match": "[+\\-*/%]" }
+      ]
+    },
+
+    "punctuation": {
+      "patterns": [
+        { "name": "punctuation.section.block.vrl", "match": "[{}]" },
+        { "name": "punctuation.section.brackets.vrl", "match": "[\\[\\]]" },
+        { "name": "punctuation.section.parens.vrl", "match": "[()]" },
+        { "name": "punctuation.separator.vrl", "match": "[,;:]" }
+      ]
+    },
+
+    "identifier": {
+      "name": "variable.other.readwrite.vrl",
+      "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+    }
+  }
+}

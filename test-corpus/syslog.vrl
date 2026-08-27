@@ -1,0 +1,42 @@
+# Synthetic syslog parser built on the public RFC 5424 shape.
+# Exists to exercise the grammar, not to be a good parser.
+
+parsed, err = parse_syslog(.message)
+if err != null {
+    .parse_error = err
+    .tags = push(array!(.tags ?? []), "syslog_parse_failed")
+} else {
+    . = merge(., object!(parsed))
+}
+
+.severity = .severity ?? "informational"
+.host = .hostname ?? .host ?? %vector.host ?? "unknown"
+."@timestamp" = format_timestamp!(.timestamp ?? now(), format: "%+")
+
+# Path coalescence, plus a quoted segment with characters an identifier can't hold.
+.service = .(appname | app_name | program)
+.["trace-id"] = .structured_data.trace.id ?? ""
+
+if !exists(.severity_number) {
+    .severity_number = to_int(.severity) ?? 6
+}
+
+# Regex with escapes that must not terminate the literal early.
+if match(.message, r'^\[\d{4}-\d{2}-\d{2}\]\s+(?i)(warn|error)\b') {
+    .level_hint = "elevated"
+}
+
+.raw = s'literal \n stays literal'
+.ingested_at = t'2024-01-01T00:00:00Z'
+.retention_days = 30
+.sample_rate = 0.25
+.offset = -1
+
+for_each(object!(.labels ?? {})) -> |key, value| {
+    if is_string(value) && length(key) > 0 {
+        .normalised_labels = set!(.normalised_labels ?? {}, [downcase(key)], value)
+    }
+}
+
+del(.structured_data)
+del(.message)

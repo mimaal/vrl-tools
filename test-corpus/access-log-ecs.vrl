@@ -1,0 +1,53 @@
+# Synthetic Common Log Format parser mapping to ECS-shaped field names.
+# Public log format, invented content. Deliberately awkward in places.
+
+.event.original = string!(.message)
+
+fields, parse_err = parse_regex(
+    .event.original,
+    r'^(?P<client>\S+) \S+ (?P<user>\S+) \[(?P<ts>[^\]]+)\] "(?P<method>[A-Z]+) (?P<path>[^"\s]+) (?P<proto>HTTP/\d\.\d)" (?P<status>\d{3}) (?P<size>\d+|-)$'
+)
+
+if parse_err != null {
+    .error.message = "clf parse failed: {{ parse_err }}"
+    .event.kind = "pipeline_error"
+    abort
+}
+
+.source.address = fields.client
+.url.path = fields.path
+.http.request.method = fields.method
+.http.response.status_code = to_int!(fields.status)
+.http.response.body.bytes = to_int(fields.size) ?? 0
+.http.version = replace!(fields.proto, r'^HTTP/', "")
+
+."@timestamp" = parse_timestamp(fields.ts, format: "%d/%b/%Y:%H:%M:%S %z") ?? now()
+
+.event.outcome = if .http.response.status_code >= 500 {
+    "failure"
+} else if .http.response.status_code >= 400 {
+    "unknown"
+} else {
+    "success"
+}
+
+.url.query = .["query-string"] ?? null
+.user.name = if fields.user == "-" { null } else { fields.user }
+.event.duration = .duration_ms * 1000000
+.event.sequence = 0
+.event.risk_score = 12.5
+
+# Metadata paths sit alongside event paths.
+%vector.ingest_timestamp = now()
+.agent.type = %vector.source_type ?? "unknown"
+
+.labels = map_values(object!(.labels ?? {})) -> |value| {
+    downcase(to_string(value) ?? "")
+}
+
+if is_null(.user.name) && !exists(.source.address) {
+    del(.user)
+}
+
+del(.message)
+del(.duration_ms)

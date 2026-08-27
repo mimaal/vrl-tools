@@ -1,0 +1,558 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "VRL",
+  "scopeName": "source.vrl",
+  "fileTypes": [
+    "vrl"
+  ],
+  "patterns": [
+    {
+      "include": "#comment"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#closure-params"
+    },
+    {
+      "include": "#destructuring"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#metadata-path"
+    },
+    {
+      "include": "#event-path"
+    },
+    {
+      "include": "#root-path"
+    },
+    {
+      "include": "#variable-path"
+    },
+    {
+      "include": "#function-call"
+    },
+    {
+      "include": "#assignment"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#punctuation"
+    },
+    {
+      "include": "#identifier"
+    }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.line.number-sign.vrl",
+      "begin": "#",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.comment.vrl"
+        }
+      },
+      "end": "$"
+    },
+    "strings": {
+      "patterns": [
+        {
+          "include": "#string-regex"
+        },
+        {
+          "include": "#string-raw"
+        },
+        {
+          "include": "#string-timestamp"
+        },
+        {
+          "include": "#string-double"
+        }
+      ]
+    },
+    "string-double": {
+      "name": "string.quoted.double.vrl",
+      "begin": "\"",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.vrl"
+        }
+      },
+      "end": "\"",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.vrl"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#string-escape"
+        },
+        {
+          "include": "#interpolation"
+        }
+      ]
+    },
+    "string-escape": {
+      "name": "constant.character.escape.vrl",
+      "match": "\\\\(?:u\\{[0-9A-Fa-f]{1,6}\\}|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|.)"
+    },
+    "interpolation": {
+      "name": "meta.embedded.line.vrl",
+      "begin": "\\{\\{",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.section.embedded.begin.vrl"
+        }
+      },
+      "end": "\\}\\}",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.embedded.end.vrl"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#metadata-path"
+        },
+        {
+          "include": "#event-path"
+        },
+        {
+          "include": "#root-path"
+        },
+        {
+          "include": "#identifier"
+        }
+      ]
+    },
+    "string-raw": {
+      "name": "string.quoted.single.raw.vrl",
+      "begin": "s'",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.vrl"
+        }
+      },
+      "end": "'",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.vrl"
+        }
+      },
+      "patterns": [
+        {
+          "name": "constant.character.escape.vrl",
+          "match": "\\\\'"
+        }
+      ]
+    },
+    "string-regex": {
+      "name": "string.regexp.vrl",
+      "begin": "r'",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.vrl"
+        }
+      },
+      "end": "'",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.vrl"
+        }
+      },
+      "patterns": [
+        {
+          "name": "constant.character.escape.regexp.vrl",
+          "match": "\\\\."
+        },
+        {
+          "name": "keyword.operator.quantifier.regexp.vrl",
+          "match": "[*+?]|\\{[0-9]*(?:,[0-9]*)?\\}"
+        },
+        {
+          "name": "keyword.operator.or.regexp.vrl",
+          "match": "\\|"
+        },
+        {
+          "name": "keyword.control.anchor.regexp.vrl",
+          "match": "[\\^$]"
+        },
+        {
+          "name": "constant.other.character-class.set.regexp.vrl",
+          "begin": "\\[",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.character-class.regexp.vrl"
+            }
+          },
+          "end": "\\]",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.character-class.regexp.vrl"
+            }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.regexp.vrl",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "meta.group.regexp.vrl",
+          "match": "[()]"
+        }
+      ]
+    },
+    "string-timestamp": {
+      "name": "constant.other.timestamp.vrl",
+      "begin": "t'",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.vrl"
+        }
+      },
+      "end": "'",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.vrl"
+        }
+      }
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.vrl",
+          "match": "\\b(?:if|else|abort|return)\\b"
+        },
+        {
+          "name": "constant.language.vrl",
+          "match": "\\b(?:true|false|null)\\b"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "comment": "Float first, so the dot of 3.14 is never offered to the path rule.",
+          "name": "constant.numeric.float.vrl",
+          "match": "(?<![A-Za-z0-9_.)\\]])-?\\b[0-9][0-9_]*\\.[0-9][0-9_]*\\b"
+        },
+        {
+          "name": "constant.numeric.integer.vrl",
+          "match": "(?<![A-Za-z0-9_.)\\]])-?\\b[0-9][0-9_]*\\b(?!\\.[0-9])"
+        }
+      ]
+    },
+    "metadata-path": {
+      "name": "variable.other.metadata.vrl",
+      "begin": "%(?=[A-Za-z_\"\\[(])",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.metadata.vrl"
+        }
+      },
+      "end": "(?=[^A-Za-z0-9_.\"\\[(])|$",
+      "patterns": [
+        {
+          "include": "#path-body"
+        }
+      ]
+    },
+    "event-path": {
+      "comment": "The lookbehind keeps this off decimal points and off a dot that follows a closing bracket.",
+      "name": "variable.other.property.vrl",
+      "begin": "(?<![A-Za-z0-9_)\\]}\"'])\\.(?=[A-Za-z_\"\\[(])",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.accessor.vrl"
+        }
+      },
+      "end": "(?=[^A-Za-z0-9_.\"\\[(])|$",
+      "patterns": [
+        {
+          "include": "#path-body"
+        }
+      ]
+    },
+    "root-path": {
+      "name": "variable.language.vrl",
+      "match": "(?<![A-Za-z0-9_)\\]}\"'])\\.(?![A-Za-z0-9_\"\\[(])"
+    },
+    "variable-path": {
+      "comment": "Member access on a variable, e.g. fields.client. Requires an identifier start after the dot, which is what keeps 3.14 out.",
+      "name": "variable.other.property.vrl",
+      "begin": "(?<=[A-Za-z0-9_)\\]}])\\.(?=[A-Za-z_\"\\[])",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.accessor.vrl"
+        }
+      },
+      "end": "(?=[^A-Za-z0-9_.\"\\[(])|$",
+      "patterns": [
+        {
+          "include": "#path-body"
+        }
+      ]
+    },
+    "path-body": {
+      "patterns": [
+        {
+          "comment": "Quoted segment, e.g. .\"@timestamp\" — very common in ECS logs.",
+          "name": "variable.other.property.quoted.vrl",
+          "begin": "\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.vrl"
+            }
+          },
+          "end": "\"",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.vrl"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#string-escape"
+            }
+          ]
+        },
+        {
+          "comment": "Path coalescence, e.g. .foo.(a | b)",
+          "begin": "\\(",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.coalesce.begin.vrl"
+            }
+          },
+          "end": "\\)",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.coalesce.end.vrl"
+            }
+          },
+          "patterns": [
+            {
+              "name": "keyword.operator.coalesce.path.vrl",
+              "match": "\\|"
+            },
+            {
+              "name": "variable.other.property.quoted.vrl",
+              "begin": "\"",
+              "end": "\"",
+              "patterns": [
+                {
+                  "include": "#string-escape"
+                }
+              ]
+            },
+            {
+              "name": "variable.other.property.vrl",
+              "match": "[A-Za-z_][A-Za-z0-9_]*"
+            }
+          ]
+        },
+        {
+          "comment": "Index, e.g. .list[0] or .[\"a-b\"]",
+          "begin": "\\[",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.index.begin.vrl"
+            }
+          },
+          "end": "\\]",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.index.end.vrl"
+            }
+          },
+          "patterns": [
+            {
+              "name": "constant.numeric.integer.vrl",
+              "match": "-?[0-9]+"
+            },
+            {
+              "name": "variable.other.property.quoted.vrl",
+              "begin": "\"",
+              "end": "\"",
+              "patterns": [
+                {
+                  "include": "#string-escape"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "punctuation.accessor.vrl",
+          "match": "\\."
+        },
+        {
+          "name": "variable.other.property.vrl",
+          "match": "[A-Za-z_][A-Za-z0-9_]*"
+        }
+      ]
+    },
+    "closure-params": {
+      "comment": "Closure parameters, e.g. for_each(.obj) -> |k, v| { ... }",
+      "begin": "(->)\\s*(\\|)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.operator.arrow.vrl"
+        },
+        "2": {
+          "name": "punctuation.definition.parameters.begin.vrl"
+        }
+      },
+      "end": "\\|",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.parameters.end.vrl"
+        }
+      },
+      "patterns": [
+        {
+          "name": "variable.parameter.vrl",
+          "match": "[A-Za-z_][A-Za-z0-9_]*"
+        },
+        {
+          "name": "punctuation.separator.parameter.vrl",
+          "match": ","
+        }
+      ]
+    },
+    "destructuring": {
+      "comment": "Error destructuring, e.g. x, err = parse_json(.message)",
+      "match": "(,)\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(?==(?!=))",
+      "captures": {
+        "1": {
+          "name": "punctuation.separator.destructuring.vrl"
+        },
+        "2": {
+          "name": "variable.other.error.vrl"
+        }
+      }
+    },
+    "assignment": {
+      "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=(?:\\|\\|)?=(?!=))",
+      "captures": {
+        "1": {
+          "name": "variable.other.assignment.vrl"
+        }
+      }
+    },
+    "function-call": {
+      "patterns": [
+        {
+          "comment": "Stdlib call in fallible-suppressing form: the ! belongs to the name, not to negation.",
+          "match": "\\b(parse_aws_cloudwatch_log_subscription_message|parse_linux_authorization|strip_ansi_escape_codes|to_syslog_facility_code|parse_aws_vpc_flow_log|uuid_from_friendly_id|tag_types_externally|validate_json_schema|from_unix_timestamp|match_datadog_query|parse_query_string|to_syslog_facility|to_syslog_severity|get_timezone_name|object_from_array|parse_aws_alb_log|to_unix_timestamp|encode_key_value|format_timestamp|ip_cidr_contains|parse_apache_log|parse_common_log|parse_user_agent|strip_whitespace|decode_punycode|encode_punycode|parse_key_value|parse_nginx_log|parse_regex_all|parse_ruby_hash|parse_timestamp|shannon_entropy|to_syslog_level|decode_charset|decode_percent|encode_charset|encode_percent|parse_duration|parse_influxdb|decode_base16|decode_base64|decode_mime_q|decode_snappy|encode_base16|encode_base64|encode_logfmt|encode_snappy|format_number|community_id|contains_all|encode_proto|get_hostname|http_request|ipv6_to_ipv4|is_timestamp|parse_logfmt|parse_syslog|parse_tokens|random_bytes|random_float|replace_with|decode_gzip|decode_zlib|decode_zstd|encode_gzip|encode_json|encode_zlib|encode_zstd|get_env_var|match_array|parse_bytes|parse_float|parse_groks|parse_proto|parse_regex|random_bool|reverse_dns|starts_with|tally_value|decode_lz4|decrypt_ip|dns_lookup|encode_lz4|encrypt_ip|format_int|ip_to_ipv6|is_boolean|is_integer|is_nullish|map_values|parse_cbor|parse_etld|parse_glog|parse_grok|parse_json|parse_klog|random_int|split_path|assert_eq|ends_with|haversine|ip_subnet|is_object|is_string|match_any|parse_cef|parse_csv|parse_int|parse_url|parse_xml|timestamp|to_string|unflatten|basename|contains|downcase|for_each|includes|is_array|is_empty|is_float|is_regex|map_keys|to_float|to_regex|truncate|type_def|compact|decrypt|dirname|encrypt|flatten|ip_aton|ip_ntoa|ip_ntop|ip_pton|is_ipv4|is_ipv6|is_json|is_null|replace|seahash|to_bool|uuid_v4|uuid_v7|append|assert|chunks|exists|filter|length|object|redact|remove|string|strlen|to_int|unique|unnest|upcase|values|xxhash|array|float|floor|match|merge|round|sieve|slice|split|tally|bool|ceil|find|hmac|join|keys|push|sha1|sha2|sha3|abs|crc|del|get|int|log|md5|mod|now|pop|set|zip)(!)(?=\\s*\\()",
+          "captures": {
+            "1": {
+              "name": "support.function.vrl"
+            },
+            "2": {
+              "name": "keyword.operator.fallible.vrl"
+            }
+          }
+        },
+        {
+          "comment": "Plain stdlib call.",
+          "match": "\\b(parse_aws_cloudwatch_log_subscription_message|parse_linux_authorization|strip_ansi_escape_codes|to_syslog_facility_code|parse_aws_vpc_flow_log|uuid_from_friendly_id|tag_types_externally|validate_json_schema|from_unix_timestamp|match_datadog_query|parse_query_string|to_syslog_facility|to_syslog_severity|get_timezone_name|object_from_array|parse_aws_alb_log|to_unix_timestamp|encode_key_value|format_timestamp|ip_cidr_contains|parse_apache_log|parse_common_log|parse_user_agent|strip_whitespace|decode_punycode|encode_punycode|parse_key_value|parse_nginx_log|parse_regex_all|parse_ruby_hash|parse_timestamp|shannon_entropy|to_syslog_level|decode_charset|decode_percent|encode_charset|encode_percent|parse_duration|parse_influxdb|decode_base16|decode_base64|decode_mime_q|decode_snappy|encode_base16|encode_base64|encode_logfmt|encode_snappy|format_number|community_id|contains_all|encode_proto|get_hostname|http_request|ipv6_to_ipv4|is_timestamp|parse_logfmt|parse_syslog|parse_tokens|random_bytes|random_float|replace_with|decode_gzip|decode_zlib|decode_zstd|encode_gzip|encode_json|encode_zlib|encode_zstd|get_env_var|match_array|parse_bytes|parse_float|parse_groks|parse_proto|parse_regex|random_bool|reverse_dns|starts_with|tally_value|decode_lz4|decrypt_ip|dns_lookup|encode_lz4|encrypt_ip|format_int|ip_to_ipv6|is_boolean|is_integer|is_nullish|map_values|parse_cbor|parse_etld|parse_glog|parse_grok|parse_json|parse_klog|random_int|split_path|assert_eq|ends_with|haversine|ip_subnet|is_object|is_string|match_any|parse_cef|parse_csv|parse_int|parse_url|parse_xml|timestamp|to_string|unflatten|basename|contains|downcase|for_each|includes|is_array|is_empty|is_float|is_regex|map_keys|to_float|to_regex|truncate|type_def|compact|decrypt|dirname|encrypt|flatten|ip_aton|ip_ntoa|ip_ntop|ip_pton|is_ipv4|is_ipv6|is_json|is_null|replace|seahash|to_bool|uuid_v4|uuid_v7|append|assert|chunks|exists|filter|length|object|redact|remove|string|strlen|to_int|unique|unnest|upcase|values|xxhash|array|float|floor|match|merge|round|sieve|slice|split|tally|bool|ceil|find|hmac|join|keys|push|sha1|sha2|sha3|abs|crc|del|get|int|log|md5|mod|now|pop|set|zip)\\b(?=\\s*\\()",
+          "captures": {
+            "1": {
+              "name": "support.function.vrl"
+            }
+          }
+        },
+        {
+          "comment": "Any other call: user closures, or functions added after the pinned crate version.",
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)(!)?(?=\\s*\\()",
+          "captures": {
+            "1": {
+              "name": "entity.name.function.vrl"
+            },
+            "2": {
+              "name": "keyword.operator.fallible.vrl"
+            }
+          }
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.coalesce.vrl",
+          "match": "\\?\\?"
+        },
+        {
+          "name": "keyword.operator.arrow.vrl",
+          "match": "->"
+        },
+        {
+          "name": "keyword.operator.comparison.vrl",
+          "match": "==|!=|>=|<=|>|<"
+        },
+        {
+          "name": "keyword.operator.logical.vrl",
+          "match": "&&|\\|\\|"
+        },
+        {
+          "comment": "Negation, e.g. !exists(.x). The lookbehind keeps it off the ! of a fallible call.",
+          "name": "keyword.operator.logical.vrl",
+          "match": "(?<![A-Za-z0-9_])!(?!=)"
+        },
+        {
+          "name": "keyword.operator.assignment.vrl",
+          "match": "(?:\\|\\|)?=(?!=)"
+        },
+        {
+          "name": "keyword.operator.arithmetic.vrl",
+          "match": "[+\\-*/%]"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.section.block.vrl",
+          "match": "[{}]"
+        },
+        {
+          "name": "punctuation.section.brackets.vrl",
+          "match": "[\\[\\]]"
+        },
+        {
+          "name": "punctuation.section.parens.vrl",
+          "match": "[()]"
+        },
+        {
+          "name": "punctuation.separator.vrl",
+          "match": "[,;:]"
+        }
+      ]
+    },
+    "identifier": {
+      "name": "variable.other.readwrite.vrl",
+      "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+    }
+  },
+  "information_for_contributors": [
+    "DO NOT EDIT. Generated by scripts/gen-grammar.ts from",
+    "vrl.tmLanguage.template.json plus the stdlib of the vrl crate.",
+    "Pinned vrl crate version: 0.29.0",
+    "Stdlib functions: 194",
+    "Regenerate with: npm run gen:grammar"
+  ],
+  "version": "vrl-0.29.0"
+}
