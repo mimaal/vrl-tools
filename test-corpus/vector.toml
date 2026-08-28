@@ -1,0 +1,33 @@
+# Synthetic Vector configuration in TOML. Same rules as vector.yaml: public
+# config format only, no third-party parsers, no sample logs.
+
+[sources.app_logs]
+type = "file"
+include = ["/var/log/app/*.log"]
+
+[transforms.parse]
+type = "remap"
+source = '''
+parsed, err = parse_json(.message)
+if err != null {
+  .parse_error = err
+} else {
+  . = merge(., object!(parsed))
+}
+
+."@timestamp" = del(.timestamp)
+.log.level = downcase(string!(.level ?? "info"))
+.matched = match(.message, r'^\d+ bytes$')
+'''
+
+[transforms.only_problems]
+type = "filter"
+condition.type = "vrl"
+condition.source = '''
+.log.level == "error"
+'''
+
+[sinks.out]
+type = "console"
+inputs = ["only_problems"]
+encoding.codec = "json"

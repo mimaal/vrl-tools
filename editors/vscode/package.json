@@ -1,8 +1,8 @@
 {
   "name": "vrl-tools",
   "displayName": "VRL Tools",
-  "description": "Syntax highlighting and real compiler diagnostics for VRL (Vector Remap Language).",
-  "version": "0.0.1",
+  "description": "Highlighting, snippets and Vector config support for VRL (Vector Remap Language).",
+  "version": "0.1.0",
   "license": "MIT",
   "publisher": "miguel-martinez",
   "repository": {
@@ -44,12 +44,33 @@
         "language": "vrl",
         "scopeName": "source.vrl",
         "path": "./syntaxes/vrl.tmLanguage.json"
+      },
+      {
+        "scopeName": "vrl.injection.yaml",
+        "path": "./syntaxes/vrl-injection-yaml.json",
+        "injectTo": [
+          "source.yaml"
+        ]
+      },
+      {
+        "scopeName": "vrl.injection.toml",
+        "path": "./syntaxes/vrl-injection-toml.json",
+        "injectTo": [
+          "source.toml"
+        ]
+      }
+    ],
+    "snippets": [
+      {
+        "language": "vrl",
+        "path": "./snippets/vrl.json"
       }
     ]
   },
   "scripts": {
     "compile": "tsc -p .",
-    "watch": "tsc -p . --watch"
+    "watch": "tsc -p . --watch",
+    "package": "vsce package --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^20.17.10",

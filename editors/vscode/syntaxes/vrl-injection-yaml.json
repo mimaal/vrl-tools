@@ -1,0 +1,22 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "VRL in Vector YAML",
+  "scopeName": "vrl.injection.yaml",
+  "injectionSelector": "L:source.yaml -string -comment",
+  "comment": "TextMate has no semantic context, so this cannot verify that the block really sits under `type: remap`. It fires on an indented `source:` key introducing a block scalar, which is how Vector spells VRL in YAML: remap transforms, and `condition:` blocks of type vrl. A `source:` at column 0 is never a Vector transform, so requiring indentation keeps unrelated YAML out.",
+  "patterns": [{ "include": "#vrl-block-scalar" }],
+  "repository": {
+    "vrl-block-scalar": {
+      "comment": "The while pattern back-references the key's indentation, so the block ends exactly where YAML says it does: at the first line that is not blank and not indented past the key.",
+      "begin": "^([ \\t]+)(source)[ \\t]*(:)[ \\t]*([|>][0-9+-]{0,3})[ \\t]*(?=$|#)",
+      "beginCaptures": {
+        "2": { "name": "entity.name.tag.yaml" },
+        "3": { "name": "punctuation.separator.key-value.mapping.yaml" },
+        "4": { "name": "keyword.control.flow.block-scalar.yaml" }
+      },
+      "while": "^(?:\\1[ \\t]|[ \\t]*$)",
+      "contentName": "meta.embedded.block.vrl",
+      "patterns": [{ "include": "source.vrl" }]
+    }
+  }
+}

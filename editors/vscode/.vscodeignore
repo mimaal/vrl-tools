@@ -1,0 +1,6 @@
+# Sources and build inputs: the .vsix ships out/ and the generated grammar only.
+src/**
+tsconfig.json
+out/**/*.map
+syntaxes/vrl.tmLanguage.template.json
+.vscodeignore

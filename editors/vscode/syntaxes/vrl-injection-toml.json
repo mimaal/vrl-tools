@@ -1,0 +1,38 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "VRL in Vector TOML",
+  "scopeName": "vrl.injection.toml",
+  "injectionSelector": "L:source.toml -string -comment",
+  "comment": "Same caveat as the YAML injection: this fires on a `source` key holding a multi-line string, which in a Vector TOML config is a remap transform. The literal ''' form is listed first because VRL regexes and escapes survive it unmangled, so it is the form to prefer.",
+  "patterns": [
+    { "include": "#vrl-literal-string" },
+    { "include": "#vrl-basic-string" }
+  ],
+  "repository": {
+    "vrl-literal-string": {
+      "begin": "^[ \\t]*((?:[A-Za-z_][A-Za-z0-9_-]*\\.)*source)[ \\t]*(=)[ \\t]*(''')",
+      "beginCaptures": {
+        "1": { "name": "variable.other.key.toml" },
+        "2": { "name": "punctuation.separator.key-value.toml" },
+        "3": { "name": "punctuation.definition.string.begin.toml" }
+      },
+      "end": "(''')",
+      "endCaptures": { "1": { "name": "punctuation.definition.string.end.toml" } },
+      "contentName": "meta.embedded.block.vrl",
+      "patterns": [{ "include": "source.vrl" }]
+    },
+
+    "vrl-basic-string": {
+      "begin": "^[ \\t]*((?:[A-Za-z_][A-Za-z0-9_-]*\\.)*source)[ \\t]*(=)[ \\t]*(\"\"\")",
+      "beginCaptures": {
+        "1": { "name": "variable.other.key.toml" },
+        "2": { "name": "punctuation.separator.key-value.toml" },
+        "3": { "name": "punctuation.definition.string.begin.toml" }
+      },
+      "end": "(\"\"\")",
+      "endCaptures": { "1": { "name": "punctuation.definition.string.end.toml" } },
+      "contentName": "meta.embedded.block.vrl",
+      "patterns": [{ "include": "source.vrl" }]
+    }
+  }
+}

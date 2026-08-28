@@ -6,18 +6,15 @@
  * Run with: npm run test:grammar
  */
 
-import { createRequire } from 'node:module';
 import { readdir, readFile } from 'node:fs/promises';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import * as oniguruma from 'vscode-oniguruma';
-import * as textmate from 'vscode-textmate';
-
-const require = createRequire(import.meta.url);
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(HERE, '..');
-const GRAMMAR = path.join(ROOT, 'editors/vscode/syntaxes/vrl.tmLanguage.json');
-const CORPUS = path.join(ROOT, 'test-corpus');
+import {
+  CORPUS,
+  findLeakingState,
+  findUnscopedText,
+  loadGrammar,
+  scopesAt,
+} from './grammar-harness.js';
 
 interface Case {
   /** What the assertion is about, printed on failure. */
@@ -132,100 +129,8 @@ const CASES: Case[] = [
   },
 ];
 
-async function loadGrammar(): Promise<textmate.IGrammar> {
-  const wasm = await readFile(require.resolve('vscode-oniguruma/release/onig.wasm'));
-  await oniguruma.loadWASM(wasm.buffer as ArrayBuffer);
-
-  const registry = new textmate.Registry({
-    onigLib: Promise.resolve({
-      createOnigScanner: (sources) => new oniguruma.OnigScanner(sources),
-      createOnigString: (str) => new oniguruma.OnigString(str),
-    }),
-    loadGrammar: async (scopeName) => {
-      if (scopeName !== 'source.vrl') {
-        return null;
-      }
-      const raw = await readFile(GRAMMAR, 'utf8');
-      return textmate.parseRawGrammar(raw, GRAMMAR);
-    },
-  });
-
-  const grammar = await registry.loadGrammar('source.vrl');
-  if (!grammar) {
-    throw new Error('source.vrl grammar failed to load');
-  }
-  return grammar;
-}
-
-/** Scopes covering the character range of the nth occurrence of `token`. */
-function scopesAt(grammar: textmate.IGrammar, line: string, token: string, nth: number): string[] {
-  let index = -1;
-  for (let i = 0; i <= nth; i++) {
-    index = line.indexOf(token, index + 1);
-    if (index < 0) {
-      throw new Error(`token ${JSON.stringify(token)} #${nth} not present in ${JSON.stringify(line)}`);
-    }
-  }
-
-  const result = grammar.tokenizeLine(line, textmate.INITIAL);
-  const scopes = new Set<string>();
-  for (const t of result.tokens) {
-    const overlaps = t.startIndex < index + token.length && t.endIndex > index;
-    if (overlaps) {
-      for (const s of t.scopes) {
-        scopes.add(s);
-      }
-    }
-  }
-  return [...scopes];
-}
-
-/**
- * Tokenises a whole file and reports lines that finish with grammar state still
- * pushed, which is what "the highlighting goes dark from here on" looks like.
- */
-function findLeakingState(grammar: textmate.IGrammar, source: string): number[] {
-  let stack = textmate.INITIAL;
-  const leaks: number[] = [];
-  const lines = source.split(/\r?\n/);
-
-  lines.forEach((line, i) => {
-    const result = grammar.tokenizeLine(line, stack);
-    stack = result.ruleStack;
-    // Every construct in VRL closes on its own line; nothing spans lines.
-    if (stack !== textmate.INITIAL && stack.depth > 1) {
-      leaks.push(i + 1);
-    }
-  });
-
-  return leaks;
-}
-
-/**
- * Non-whitespace text that came out carrying only the root scope. That is
- * exactly what "the highlighting goes dark here" looks like in an editor:
- * the text renders in the default foreground because no theme rule matches.
- */
-function findUnscopedText(grammar: textmate.IGrammar, source: string): string[] {
-  let stack = textmate.INITIAL;
-  const dark: string[] = [];
-
-  source.split(/\r?\n/).forEach((line, i) => {
-    const result = grammar.tokenizeLine(line, stack);
-    stack = result.ruleStack;
-    for (const t of result.tokens) {
-      const text = line.slice(t.startIndex, t.endIndex);
-      if (text.trim() !== '' && t.scopes.length === 1) {
-        dark.push(`line ${i + 1}: ${JSON.stringify(text)}`);
-      }
-    }
-  });
-
-  return dark;
-}
-
 async function main(): Promise<void> {
-  const grammar = await loadGrammar();
+  const grammar = await loadGrammar('source.vrl');
   let failed = 0;
 
   for (const c of CASES) {

@@ -19,6 +19,14 @@ Free and open source. Full phased plan lives in @docs/PLAN.md.
   Vector release number != `vrl` crate version. The crate is on 0.x and has
   never published a 0.52.0.
 
+- VRL highlighting inside Vector configs is a TextMate injection
+  (`injectTo: source.yaml` / `source.toml`). VS Code has no supported way to
+  disable an injection through a setting, so the `vrl-tools.injectIntoYaml`
+  setting sketched in phase 2 of the plan does not exist and should not be
+  added as a no-op. The trigger is kept narrow instead: an *indented* `source:`
+  block scalar in YAML, a `source` (or dotted `*.source`) multi-line string in
+  TOML.
+
 ## Working rules
 
 - NEVER hand-write stdlib function lists. Generate them.
@@ -40,6 +48,9 @@ Free and open source. Full phased plan lives in @docs/PLAN.md.
 ## Verification
 
 - `cargo test` across the workspace before closing out a phase.
+- Snippets are only tokenised today, which proves they are well formed but not
+  that they compile. When phase 3 lands, run the same expansions through
+  `vrl-check-core` in `scripts/test-snippets.ts`.
 - Test the extension against the real parsers in `test-corpus/`, never against
   toy examples. That corpus is generated from the `vrl` crate's stdlib examples
   at test time, plus synthetic parsers built on public log formats.

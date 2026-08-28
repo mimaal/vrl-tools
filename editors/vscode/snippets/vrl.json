@@ -1,0 +1,177 @@
+{
+  "parse JSON with error handling": {
+    "prefix": "pjson",
+    "description": "parse_json into the event, keeping the error instead of dropping it.",
+    "body": [
+      "${1:parsed}, err = parse_json(${2:.message})",
+      "if err != null {",
+      "\t.${3:parse_error} = err",
+      "} else {",
+      "\t. = merge(., object!($1))",
+      "\tdel($2)",
+      "}"
+    ]
+  },
+
+  "parse syslog": {
+    "prefix": "psyslog",
+    "description": "parse_syslog with the RFC 5424/3164 fields merged into the event.",
+    "body": [
+      "parsed, err = parse_syslog(${1:.message})",
+      "if err != null {",
+      "\t.${2:parse_error} = err",
+      "} else {",
+      "\t. = merge(., parsed)",
+      "}"
+    ]
+  },
+
+  "parse key/value pairs": {
+    "prefix": "pkv",
+    "description": "parse_key_value with the delimiters spelled out, which is where this one usually goes wrong.",
+    "body": [
+      "parsed, err = parse_key_value(",
+      "\t${1:.message},",
+      "\tkey_value_delimiter: \"${2:=}\",",
+      "\tfield_delimiter: \"${3: }\",",
+      "\twhitespace: \"${4|lenient,strict|}\"",
+      ")",
+      "if err != null {",
+      "\t.${5:parse_error} = err",
+      "} else {",
+      "\t. = merge(., parsed)",
+      "}"
+    ]
+  },
+
+  "parse grok": {
+    "prefix": "pgrok",
+    "description": "parse_grok with a raw string pattern, so backslashes survive.",
+    "body": [
+      "parsed, err = parse_grok(",
+      "\t${1:.message},",
+      "\ts'%{TIMESTAMP_ISO8601:timestamp} %{LOGLEVEL:level} %{GREEDYDATA:rest}'",
+      ")",
+      "if err != null {",
+      "\t.${2:parse_error} = err",
+      "} else {",
+      "\t. = merge(., parsed)",
+      "}"
+    ]
+  },
+
+  "parse with a regex": {
+    "prefix": "pregex",
+    "description": "parse_regex with named capture groups.",
+    "body": [
+      "parsed, err = parse_regex(${1:.message}, r'${2:^(?P<level>\\w+)\\s+(?P<rest>.*)\\$}')",
+      "if err != null {",
+      "\t.${3:parse_error} = err",
+      "} else {",
+      "\t. = merge(., parsed)",
+      "}"
+    ]
+  },
+
+  "normalise a timestamp": {
+    "prefix": "ptime",
+    "description": "Parse a timestamp into a real timestamp type, falling back to ingest time.",
+    "body": [
+      "ts, err = parse_timestamp(${1:.timestamp}, format: \"${2:%Y-%m-%dT%H:%M:%S%.fZ}\")",
+      "if err != null {",
+      "\t.${3:timestamp_parse_error} = err",
+      "\t$1 = now()",
+      "} else {",
+      "\t$1 = ts",
+      "}"
+    ]
+  },
+
+  "coerce field types": {
+    "prefix": "coerce",
+    "description": "Type coercion block: ?? keeps a bad value from aborting the program.",
+    "body": [
+      ".${1:status} = to_int(.$1) ?? null",
+      ".${2:bytes} = to_int(.$2) ?? 0",
+      ".${3:duration} = to_float(.$3) ?? null",
+      ".${4:success} = to_bool(.$4) ?? false"
+    ]
+  },
+
+  "iterate over an object": {
+    "prefix": "foreach",
+    "description": "for_each over an object, with the value shadowed inside the closure.",
+    "body": [
+      "for_each(object!(${1:.fields})) -> |key, value| {",
+      "\t$0",
+      "}"
+    ]
+  },
+
+  "rewrite every value of an object": {
+    "prefix": "mapvalues",
+    "description": "map_values, the usual way to trim or downcase a whole object.",
+    "body": [
+      "${1:.} = map_values(${2:.}) -> |value| {",
+      "\tstring(value) ?? value",
+      "}"
+    ]
+  },
+
+  "map to ECS": {
+    "prefix": "ecs",
+    "description": "Skeleton mapping to Elastic Common Schema field names.",
+    "body": [
+      ".\"@timestamp\" = del(.timestamp)",
+      ".event.dataset = \"${1:my.dataset}\"",
+      ".event.original = del(.message)",
+      ".host.name = del(.hostname)",
+      ".log.level = downcase(string!(del(.level)))",
+      ".service.name = \"${2:my-service}\"",
+      "$0"
+    ]
+  },
+
+  "guard clause": {
+    "prefix": "abortif",
+    "description": "Drop the event early when a required field is missing.",
+    "body": [
+      "if !exists(${1:.message}) {",
+      "\tabort",
+      "}"
+    ]
+  },
+
+  "if / else": {
+    "prefix": "ifelse",
+    "description": "Conditional with both branches.",
+    "body": [
+      "if ${1:.status >= 400} {",
+      "\t$2",
+      "} else {",
+      "\t$0",
+      "}"
+    ]
+  },
+
+  "match against a regex": {
+    "prefix": "ifmatch",
+    "description": "Branch on a regex match, with the pattern as a raw string.",
+    "body": [
+      "if match(${1:.message}, r'${2:^ERROR}') {",
+      "\t$0",
+      "}"
+    ]
+  },
+
+  "fallible call, error kept": {
+    "prefix": "iferr",
+    "description": "Call a fallible function and keep the error instead of suppressing it with !.",
+    "body": [
+      "${1:value}, err = ${2:to_int}(${3:.field})",
+      "if err != null {",
+      "\t.${4:error} = err",
+      "}"
+    ]
+  }
+}

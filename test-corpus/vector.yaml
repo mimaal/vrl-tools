@@ -1,0 +1,44 @@
+# Synthetic Vector configuration. Public config format and public log field
+# names only: no third-party parsers and no sample logs live in this repo.
+#
+# This file exists to exercise the VRL injection grammar, so it deliberately
+# mixes the shapes VRL appears in (remap `source:`, a vrl `condition:`) with a
+# `source` key that is not VRL at all.
+
+sources:
+  app_logs:
+    type: file
+    include:
+      - /var/log/app/*.log
+
+transforms:
+  parse:
+    type: remap
+    source: |-
+      parsed, err = parse_json(.message)
+      if err != null {
+        .parse_error = err
+      } else {
+        . = merge(., object!(parsed))
+      }
+
+      ."@timestamp" = del(.timestamp)
+      .log.level = downcase(string!(.level ?? "info"))
+      .http.response.status_code = to_int(.status) ?? null
+
+  only_problems:
+    type: filter
+    condition:
+      type: vrl
+      source: |
+        .log.level == "error" || (to_int(.http.response.status_code) ?? 0) >= 500
+
+sinks:
+  out:
+    type: console
+    inputs:
+      - only_problems
+    encoding:
+      codec: json
+    # A `source` key that holds a plain scalar must stay plain YAML.
+    source: not-a-block-scalar

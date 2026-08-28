@@ -16,9 +16,13 @@
     "build": "npm run gen:grammar && npm run compile",
     "watch": "npm run watch --workspace editors/vscode",
     "test:grammar": "tsx scripts/test-grammar.ts",
-    "test": "npm run test:grammar"
+    "test:injection": "tsx scripts/test-injection.ts",
+    "test:snippets": "tsx scripts/test-snippets.ts",
+    "test": "npm run test:grammar && npm run test:injection && npm run test:snippets",
+    "package": "npm run build && npm test && npm run package --workspace editors/vscode"
   },
   "devDependencies": {
+    "@vscode/vsce": "^3.9.2",
     "tar": "^7.4.3",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
