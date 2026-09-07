@@ -2,7 +2,7 @@
   "name": "vrl-tools",
   "displayName": "VRL Tools",
   "description": "Highlighting, snippets and Vector config support for VRL (Vector Remap Language).",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "license": "MIT",
   "publisher": "miguel-martinez",
   "repository": {
@@ -67,7 +67,34 @@
         "language": "vrl",
         "path": "./snippets/vrl.json"
       }
-    ]
+    ],
+    "commands": [
+      {
+        "command": "vrl-tools.runOnSampleEvent",
+        "title": "Run on sample event",
+        "category": "VRL",
+        "enablement": "editorLangId == vrl"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "vrl-tools.runOnSampleEvent",
+          "when": "editorLangId == vrl",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "VRL Tools",
+      "properties": {
+        "vrl-tools.useSampleEventForDiagnostics": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Type each program against the sample event next to it (`program.vrl.sample.json`), when there is one. The compiler then knows the fields your events actually carry, which turns \"this might fail\" into \"this field does not exist\". Turn it off to always check against an event of unknown shape."
+        }
+      }
+    }
   },
   "scripts": {
     "compile": "tsc -p .",

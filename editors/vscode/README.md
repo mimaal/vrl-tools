@@ -18,6 +18,11 @@ language used by [Vector](https://vector.dev).
   `for_each` and friends — and after a `.` it offers the event paths this file
   already uses. Signature help follows the cursor from one argument to the
   next, named arguments included.
+- **Run a program on a sample event.** Put `program.vrl.sample.json` next to
+  `program.vrl` and `VRL: Run on sample event` compiles the program, runs it on
+  that event and opens the result beside the source. The sample also types the
+  program: `.message` is a string because the sample says so, so the "this
+  might fail" noise goes away and a misspelled field starts being caught.
 - **Syntax highlighting** built for the constructs that actually show up in
   production parsers: quoted path segments (`."@timestamp"`), metadata paths
   (`%vector.ingest_timestamp`), regex (`r'…'`), raw strings (`s'…'`),
@@ -39,13 +44,13 @@ deployment, so it is worth having on screen.
 
 ## What it does not do yet
 
-- The compiler is not told the shape of your events, so `.message` has an
-  unknown type and `parse_json(.message)` is reported as fallible even when you
-  know it is a string. Handle the error, or use `!` where you are sure.
-  Running a program against a sample event, which is what would fix this, is
-  the next step.
+- With no sample event, the compiler is told nothing about the shape of your
+  events, so `parse_json(.message)` is reported as fallible even when you know
+  `.message` is a string. A sample fixes the typing; it cannot make a function
+  that fails on valid input infallible.
 - Diagnostics, hover and completion apply to `.vrl` files. VRL embedded in a
   Vector config is highlighted but not yet compiled.
+- One sample event per program, not a set of them.
 - Completion does not add the `!` of a fallible call for you. Asserting turns
   a handled error into an aborted program, and that is your decision to make.
 

@@ -16,7 +16,7 @@ heuristics. If `vector validate` would reject your program, so will this.
 | 2 | Snippets, VRL injection into Vector YAML/TOML configs | done |
 | 3 | Real compiler diagnostics via WASM | done |
 | 4 | Hover, completion and signature help, generated from the stdlib | done |
-| 5 | Run a program against a sample event | not started |
+| 5 | Run a program against a sample event | done |
 
 ## VRL inside Vector configs
 
@@ -82,10 +82,60 @@ module fails to load, the extension says so and leaves highlighting and
 snippets working rather than falling back to a regex impression of a type
 checker.
 
-There is one thing it cannot know yet: the shape of `.`. The compiler is told
-the incoming event is of unknown type, which is why `parse_json(.message)` is
-fallible even when you know `.message` is a string. Feeding it a sample event
-is phase 5.
+By default the compiler is told nothing about the shape of `.`, which is why
+`parse_json(.message)` is fallible even when you know `.message` is a string.
+Put a sample event next to the file and that changes — see below.
+
+## The sample event
+
+Put a JSON file next to a program, named after it with `.sample.json` appended,
+and two things happen.
+
+```
+parsers/
+  access-log.vrl
+  access-log.vrl.sample.json     <- one event, as it arrives
+```
+
+**The program is typed against it.** `.message` is a string because the sample
+says so, so `downcase(.message)` stops being fallible and the noise goes away.
+`.count + 1` compiles because `.count` is a number. And a field the sample does
+not have is no longer assumed to be anything at all, so the arithmetic on a
+misspelled `.mesage` is caught.
+
+**`VRL: Run on sample event`** (also the status bar item, and the editor
+context menu) compiles the program, runs it on that event, and opens the result
+beside the source: the event as Vector would emit it, with what happened in
+comments above — what the program returned, what it did to the metadata,
+whether it aborted. It is the vector.dev playground, except local, against your
+own data, and on the exact compiler version your Vector runs.
+
+The status bar says which of the two answers you are looking at: `VRL 0.29.0`
+for an unknown event, `VRL 0.29.0 · sample` when a sample is in use. Editing
+the sample re-checks the program, so the two can be worked on side by side.
+Set `vrl-tools.useSampleEventForDiagnostics` to `false` to always check against
+an unknown event.
+
+Two things a sample deliberately does **not** do:
+
+- **It does not close the shape of your events.** The fields the sample has get
+  the types it gives them; every other field stays unknown, exactly as it is
+  with no sample. Reading it as "these fields and no others" would make
+  `.event.original = …` an error whenever the sample has no `.event` — and
+  mapping an event into a new shape is most of what VRL is for.
+- **It does not make your error handling wrong.** With every field present and
+  typed, the compiler starts calling defensive code redundant: `string(.hostname)
+  ?? "unknown"` earns *unnecessary error coalescing operation*, an error. But
+  the coalesce is unnecessary for *that one event*, not for the next one. So
+  when one of the three "your error handling is unnecessary" diagnostics (104,
+  620, 651) appears only because of a sample — the compiler is asked both ways
+  to find out — it is reported as a warning with a note saying why. Error
+  handling that is redundant regardless of the event stays an error.
+
+What a sample cannot fix is a function that fails on valid input:
+`parse_json(.message)` is fallible however well-typed `.message` is, because
+the string still might not be JSON. Only the runtime knows that, which is what
+running it on the sample tells you.
 
 ## Hover, completion and signature help
 
@@ -134,10 +184,11 @@ rejects.
 
 ## Status
 
-Early development, v0.3.0. Nothing is published to the Marketplace, but
-`npm run package` produces an installable `.vsix`. Highlighting, snippets,
-config injection, compiler diagnostics, hover, completion and signature help
-all work.
+Early development, v0.4.0, and feature-complete against the plan. Nothing is
+published to the Marketplace, but `npm run package` produces an installable
+`.vsix`. Highlighting, snippets, config injection, compiler diagnostics, hover,
+completion, signature help, sample-typed checking and running a program against
+a sample event all work.
 
 Pinned to the `vrl` crate `0.29.0`, which is what Vector 0.52.0 depends on.
 
@@ -163,7 +214,7 @@ cargo test           # the checker itself, plus every stdlib example
 Install the result locally with:
 
 ```sh
-code --install-extension editors/vscode/vrl-tools-0.3.0.vsix
+code --install-extension editors/vscode/vrl-tools-0.4.0.vsix
 ```
 
 `npm test` runs five suites. Three go through the same Oniguruma engine VS Code

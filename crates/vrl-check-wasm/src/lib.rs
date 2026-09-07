@@ -41,6 +41,27 @@ pub fn check(source: &str, sample_event_json: Option<String>) -> String {
     })
 }
 
+/// Compiles `source` against `event_json` and runs it, returning JSON.
+///
+/// The shape is `vrl_check_core::Run`: the event after the program, its
+/// metadata, the value the program returned, and the runtime error if it
+/// stopped.
+///
+/// This executes the user's own program inside the same sandbox as everything
+/// else here. It has no filesystem and no network to reach: the functions that
+/// would want them are compiled in but abort when called.
+#[wasm_bindgen]
+#[must_use]
+pub fn run(source: &str, event_json: &str) -> String {
+    vrl_check_core::run_json(source, event_json).unwrap_or_else(|error| {
+        format!(
+            "{{\"compiled\":false,\"vrlVersion\":\"{}\",\"diagnostics\":[],\"internalError\":{}}}",
+            vrl_check_core::VRL_VERSION,
+            serde_json_string(&error.to_string()),
+        )
+    })
+}
+
 /// The standard library as JSON, for hover, completion and signature help.
 ///
 /// It comes out of the same module that compiles programs, so what the editor
@@ -107,6 +128,21 @@ mod tests {
 
         assert!(json.contains("\"compiled\":false"), "{json}");
         assert!(json.contains("\"severity\":\"error\""), "{json}");
+    }
+
+    #[test]
+    fn running_a_program_crosses_the_boundary() {
+        let json = run(".status = to_int!(.status)\n", "{\"status\":\"200\"}");
+
+        assert!(json.contains("\"compiled\":true"), "{json}");
+        assert!(json.contains("\"status\":200"), "{json}");
+    }
+
+    #[test]
+    fn a_run_against_a_broken_sample_still_answers() {
+        let json = run(".x = 1\n", "not json");
+
+        assert!(json.contains("\"sampleError\""), "{json}");
     }
 
     #[test]

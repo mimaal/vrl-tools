@@ -9,6 +9,28 @@ export interface Check {
   readonly compiled: boolean;
   readonly vrlVersion: string;
   readonly diagnostics: readonly VrlDiagnostic[];
+  /** `true` when a sample event was supplied and used to type the program. */
+  readonly typedWithSample: boolean;
+  /** Why the sample was ignored, when one was supplied and unusable. */
+  readonly sampleError: string | null;
+}
+
+/** What happened when a program ran against a sample event. */
+export interface Run {
+  readonly compiled: boolean;
+  readonly vrlVersion: string;
+  readonly diagnostics: readonly VrlDiagnostic[];
+  /** The event after the program, which is what Vector would emit. */
+  readonly event: unknown;
+  /** The event's metadata after the program. */
+  readonly metadata: unknown;
+  /** The value the program itself returned. */
+  readonly output: unknown;
+  /** The runtime error, if the program stopped. */
+  readonly error: string | null;
+  /** `true` when the program called `abort`: Vector would drop the event. */
+  readonly aborted: boolean;
+  readonly sampleError: string | null;
 }
 
 export interface VrlDiagnostic {
@@ -76,6 +98,7 @@ export interface StdlibExample {
 
 interface WasmModule {
   check(source: string, sampleEventJson?: string): string;
+  run(source: string, eventJson: string): string;
   stdlib(): string;
   vrl_version(): string;
 }
@@ -111,6 +134,16 @@ export class VrlChecker {
 
   check(source: string, sampleEventJson?: string): Check {
     return JSON.parse(this.wasm.check(source, sampleEventJson)) as Check;
+  }
+
+  /**
+   * Compiles `source` against `eventJson` and runs it.
+   *
+   * This executes the user's program. It runs in the same wasm sandbox as the
+   * checker, with no filesystem and no network to reach.
+   */
+  run(source: string, eventJson: string): Run {
+    return JSON.parse(this.wasm.run(source, eventJson)) as Run;
   }
 
   /**

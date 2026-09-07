@@ -3,6 +3,9 @@ import * as vscode from 'vscode';
 import { VrlChecker } from './checker';
 import { DiagnosticRunner } from './diagnostics';
 import { registerLanguageFeatures } from './language';
+import { registerRun } from './run';
+import { SampleStore } from './sample';
+import { StatusBar } from './status';
 
 /**
  * Diagnostics, hover, completion and signature help all come from the real VRL
@@ -29,33 +32,21 @@ export function activate(context: vscode.ExtensionContext): void {
 
   output.appendLine(`VRL Tools activated, compiling against vrl ${checker.vrlVersion}.`);
 
-  context.subscriptions.push(new DiagnosticRunner(checker, output));
+  const status = new StatusBar(checker.vrlVersion);
+  context.subscriptions.push(status);
+
+  // The store is created before the runner and told about it afterwards: a
+  // sample changing has to re-check the program next to it, and the runner is
+  // what knows how to do that.
+  let runner: DiagnosticRunner | undefined;
+  const samples = new SampleStore((program) => runner?.recheck(program));
+  context.subscriptions.push(samples);
+
+  runner = new DiagnosticRunner(checker, samples, status, output);
+  context.subscriptions.push(runner);
+
   context.subscriptions.push(...registerLanguageFeatures(checker, output));
-  context.subscriptions.push(createStatusBarItem(checker.vrlVersion));
-}
-
-/**
- * The pinned VRL version is on screen at all times on purpose: when this
- * disagrees with the Vector running in production, the editor and the
- * deployment disagree too, and that is the first thing to check.
- */
-function createStatusBarItem(vrlVersion: string): vscode.StatusBarItem {
-  const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-  item.text = `VRL ${vrlVersion}`;
-  item.tooltip = `Diagnostics come from the vrl crate ${vrlVersion}, the version Vector 0.52.0 ships. A different Vector in production may disagree.`;
-
-  const update = (editor: vscode.TextEditor | undefined): void => {
-    if (editor?.document.languageId === 'vrl') {
-      item.show();
-    } else {
-      item.hide();
-    }
-  };
-
-  vscode.window.onDidChangeActiveTextEditor(update);
-  update(vscode.window.activeTextEditor);
-
-  return item;
+  context.subscriptions.push(...registerRun(checker, samples, output));
 }
 
 export function deactivate(): void {

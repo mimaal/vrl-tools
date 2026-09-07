@@ -4,13 +4,16 @@
  *
  * The Rust tests already cover the checker itself. What only this side can
  * cover is the boundary — that positions and notes survive the trip through
- * JSON — and the corpus, where two questions matter:
+ * JSON — and the corpus, where four questions matter:
  *
  *   - every `.vrl` file in test-corpus/ compiles clean, so a version bump that
  *     changes the language fails here rather than in someone's editor;
  *   - every region the injection grammars paint as VRL inside a Vector config
  *     compiles clean too. Colouring something as VRL that the compiler would
- *     reject is a promise the extension cannot keep.
+ *     reject is a promise the extension cannot keep;
+ *   - every program with a sample event next to it still compiles when typed
+ *     against that sample, and actually runs on it;
+ *   - the standard library dump says what the compiler says.
  *
  * Run with: npm run test:diagnostics
  */
@@ -18,7 +21,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 
-import { check, errorsIn, stdlib, vrlVersion } from './checker-harness.js';
+import { check, errorsIn, run, stdlib, vrlVersion } from './checker-harness.js';
 import { CORPUS, embeddedRegions, loadGrammar, ROOT } from './grammar-harness.js';
 
 let failed = 0;
@@ -78,6 +81,138 @@ async function checkCorpusPrograms(): Promise<void> {
       continue;
     }
     ok(`corpus ${file} compiles clean`);
+  }
+}
+
+/**
+ * The corpus programs against the sample events next to them: the phase 5
+ * path, end to end through the shipped module.
+ *
+ * Three things have to hold, and each of them was broken at some point while
+ * this was written:
+ *
+ *   - a sample must not turn a working parser into a broken one. A parser is
+ *     defensive by design, and a sample that happens to have every field makes
+ *     the compiler call that defensiveness redundant;
+ *   - a sample must not forbid building a new shape. `.event.original = …` is
+ *     most of what a mapping program does, and a sample with no `.event` must
+ *     not make that an error;
+ *   - what the editor says and what running the program does have to agree. If
+ *     no errors are shown, it runs.
+ */
+async function checkSampleTypedPrograms(): Promise<void> {
+  const files = (await readdir(CORPUS)).filter((f) => f.endsWith('.vrl'));
+  let sampled = 0;
+
+  for (const file of files) {
+    const samplePath = path.join(CORPUS, `${file}.sample.json`);
+    let sample: string;
+    try {
+      sample = await readFile(samplePath, 'utf8');
+    } catch {
+      continue;
+    }
+    sampled++;
+
+    const source = await readFile(path.join(CORPUS, file), 'utf8');
+    const result = check(source, sample);
+
+    if (!result.typedWithSample) {
+      fail(`${file} is typed against its sample`, `sampleError: ${String(result.sampleError)}`);
+      continue;
+    }
+
+    const errors = result.diagnostics.filter((d) => d.severity === 'error' || d.severity === 'bug');
+    if (errors.length > 0) {
+      fail(
+        `${file} still compiles when typed against its sample`,
+        errors.map((e) => `line ${e.range.start.line + 1}: E${e.code} ${e.message}`).join('\n'),
+      );
+      continue;
+    }
+    ok(`${file} compiles when typed against its sample`);
+
+    // Every diagnostic left has to be one the sample itself provoked;
+    // anything else would be a regression the no-sample check already covers.
+    const unexplained = result.diagnostics.filter((d) => !d.relaxedBySample);
+    if (unexplained.length > 0) {
+      fail(
+        `${file}: every remaining diagnostic is explained by the sample`,
+        unexplained
+          .map((d) => `line ${d.range.start.line + 1}: ${d.severity} E${d.code} ${d.message}`)
+          .join('\n'),
+      );
+    }
+
+    const ran = run(source, sample);
+    if (!ran.compiled || ran.error || ran.aborted) {
+      fail(
+        `${file} runs on its sample event`,
+        `compiled: ${ran.compiled}, aborted: ${ran.aborted}, error: ${String(ran.error)}`,
+      );
+      continue;
+    }
+    if (!ran.event || typeof ran.event !== 'object') {
+      fail(`${file} produces an event`, `got ${JSON.stringify(ran.event)}`);
+      continue;
+    }
+    ok(`${file} runs on its sample and produces an event`);
+  }
+
+  if (sampled === 0) {
+    fail('the corpus exercises sample events', 'no .vrl.sample.json next to any corpus program');
+  }
+}
+
+/**
+ * The rule that keeps a sample from doing more harm than good, checked
+ * directly rather than only through the corpus.
+ */
+function checkSamplePolicy(): void {
+  const defensive = '.host = string(.hostname) ?? "unknown"\n';
+  const withSample = check(defensive, '{"hostname":"web-01"}');
+
+  if (!withSample.compiled) {
+    fail('a defensive program survives a sample', describe(defensive));
+  } else if (!withSample.diagnostics.some((d) => d.relaxedBySample && d.severity === 'warning')) {
+    fail(
+      'redundant error handling is reported as a warning',
+      JSON.stringify(withSample.diagnostics),
+    );
+  } else {
+    ok('a defensive program survives a sample, with a warning rather than an error');
+  }
+
+  // Redundant whatever the event looks like: the sample had nothing to do
+  // with it, so it stays an error.
+  const always = check('.x = 1 ?? 2\n', '{"message":"hello"}');
+  if (always.diagnostics.some((d) => d.code === 651 && d.severity === 'error')) {
+    ok('error handling that is always redundant stays an error');
+  } else {
+    fail('error handling that is always redundant stays an error', JSON.stringify(always.diagnostics));
+  }
+
+  // Building a new shape is most of what VRL is for.
+  const mapping = check('.event.original = string!(.message)\n', '{"message":"hello"}');
+  if (mapping.compiled) {
+    ok('a sample does not forbid creating a field it does not have');
+  } else {
+    fail(
+      'a sample does not forbid creating a field it does not have',
+      JSON.stringify(mapping.diagnostics),
+    );
+  }
+
+  // And the headline: a field the sample does have gets its real type.
+  const typed = check('.level = downcase(.message)\n', '{"message":"HELLO"}');
+  const untyped = check('.level = downcase(.message)\n');
+  if (typed.compiled && !untyped.compiled) {
+    ok('a known field type turns a fallible call into an infallible one');
+  } else {
+    fail(
+      'a known field type turns a fallible call into an infallible one',
+      `with sample: ${typed.compiled}, without: ${untyped.compiled}`,
+    );
   }
 }
 
@@ -233,6 +368,8 @@ async function main(): Promise<void> {
 
   await checkVersionAgrees();
   await checkCorpusPrograms();
+  await checkSampleTypedPrograms();
+  checkSamplePolicy();
   await checkEmbeddedPrograms();
   checkBoundary();
   checkStdlib();

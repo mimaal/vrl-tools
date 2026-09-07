@@ -51,6 +51,21 @@ Free and open source. Full phased plan lives in @docs/PLAN.md.
   decision, and the diagnostics point at the line either way. The plan's
   "sufijo `!` automático" is deliberately not implemented.
 
+- A sample event (`program.vrl.sample.json`) types the program, and the shape it
+  builds is deliberately OPEN: the fields it has get its types, every other
+  field stays `any`. Reading it as a closed shape makes `.event.original = ...`
+  an error whenever the sample has no `.event`, which breaks every mapping
+  program. Don't "tighten" this.
+- A sample also makes the compiler call defensive error handling redundant
+  (104, 620, 651). Those three, and only when the same program compiled against
+  an unknown event does NOT raise them, are reported as warnings with a note.
+  The test is the compiler asked twice, not a guess. See `OVER_DEFENSIVE`.
+- `check` and `run` must agree: if no errors are on screen, running has to
+  work. That is why `run` falls back to compiling against an unknown event when
+  the only objection to the sample's types was redundant error handling.
+- Programs run in UTC, never the machine's timezone. The machine an editor runs
+  on says nothing about the machine Vector runs on.
+
 ## Working rules
 
 - NEVER hand-write stdlib function lists. Generate them.

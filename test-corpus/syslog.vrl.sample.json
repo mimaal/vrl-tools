@@ -1,0 +1,7 @@
+{
+  "message": "<13>1 2024-01-01T00:00:00.000Z web-01 checkout 4321 ID47 - order 1234 accepted",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "hostname": "web-01",
+  "labels": { "Env": "prod", "Team": "payments" },
+  "tags": ["ingested"]
+}

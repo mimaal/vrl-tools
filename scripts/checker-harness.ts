@@ -21,6 +21,19 @@ export interface Check {
   readonly diagnostics: readonly CheckDiagnostic[];
 }
 
+/** Mirrors `vrl_check_core::Run`. */
+export interface RunResult {
+  readonly compiled: boolean;
+  readonly vrlVersion: string;
+  readonly diagnostics: readonly CheckDiagnostic[];
+  readonly event: unknown;
+  readonly metadata: unknown;
+  readonly output: unknown;
+  readonly error: string | null;
+  readonly aborted: boolean;
+  readonly sampleError: string | null;
+}
+
 export interface CheckDiagnostic {
   readonly severity: 'bug' | 'error' | 'warning' | 'note';
   readonly code: number;
@@ -32,6 +45,8 @@ export interface CheckDiagnostic {
   readonly labels: readonly { readonly message: string; readonly primary: boolean }[];
   readonly notes: readonly string[];
   readonly documentationUrl: string | null;
+  /** Softened from an error because only the sample event produced it. */
+  readonly relaxedBySample: boolean;
 }
 
 /** Mirrors `vrl_check_core::Stdlib`; see editors/vscode/src/checker.ts. */
@@ -57,6 +72,7 @@ export interface StdlibFunction {
 
 interface WasmModule {
   check(source: string, sampleEventJson?: string): string;
+  run(source: string, eventJson: string): string;
   stdlib(): string;
   vrl_version(): string;
 }
@@ -91,8 +107,13 @@ function load(): WasmModule {
 }
 
 /** Compiles `source` with the real VRL compiler. */
-export function check(source: string): Check {
-  return JSON.parse(load().check(source)) as Check;
+export function check(source: string, sampleEventJson?: string): Check {
+  return JSON.parse(load().check(source, sampleEventJson)) as Check;
+}
+
+/** Compiles `source` against `eventJson` and runs it. */
+export function run(source: string, eventJson: string): RunResult {
+  return JSON.parse(load().run(source, eventJson)) as RunResult;
 }
 
 /** The pinned `vrl` crate version the module was built against. */
@@ -112,8 +133,8 @@ export function stdlib(): Stdlib {
 let cachedStdlib: Stdlib | undefined;
 
 /** Only the diagnostics that stop a program from compiling. */
-export function errorsIn(source: string): CheckDiagnostic[] {
-  return check(source).diagnostics.filter(
+export function errorsIn(source: string, sampleEventJson?: string): CheckDiagnostic[] {
+  return check(source, sampleEventJson).diagnostics.filter(
     (diagnostic) => diagnostic.severity === 'error' || diagnostic.severity === 'bug',
   );
 }

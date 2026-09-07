@@ -1,0 +1,8 @@
+{
+  "message": "203.0.113.7 - alice [10/Oct/2023:13:55:36 -0700] \"GET /checkout HTTP/1.1\" 200 2326",
+  "timestamp": "2023-10-10T20:55:36Z",
+  "hostname": "edge-02",
+  "duration_ms": 42,
+  "query-string": "utm_source=newsletter",
+  "labels": { "Tier": "GOLD" }
+}
