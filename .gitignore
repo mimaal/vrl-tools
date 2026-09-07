@@ -19,3 +19,9 @@ Thumbs.db
 
 # Generator download cache
 .cache/
+
+# Machine-specific cargo settings (target-dir on another drive)
+.cargo/config.toml
+
+# wasm-pack output, built by npm run build:wasm
+editors/vscode/wasm/

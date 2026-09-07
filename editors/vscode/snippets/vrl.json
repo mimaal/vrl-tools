@@ -144,9 +144,9 @@
 
   "if / else": {
     "prefix": "ifelse",
-    "description": "Conditional with both branches.",
+    "description": "Conditional with both branches. The coercion is not decoration: comparing an untyped field with >= is a fallible predicate and will not compile.",
     "body": [
-      "if ${1:.status >= 400} {",
+      "if ${1:(to_int(.status) ?? 0) >= 400} {",
       "\t$2",
       "} else {",
       "\t$0",
@@ -156,9 +156,9 @@
 
   "match against a regex": {
     "prefix": "ifmatch",
-    "description": "Branch on a regex match, with the pattern as a raw string.",
+    "description": "Branch on a regex match, with the pattern as a raw string. match() over an untyped field is fallible, so the value is coerced rather than asserted with !.",
     "body": [
-      "if match(${1:.message}, r'${2:^ERROR}') {",
+      "if match(to_string(${1:.message}) ?? \"\", r'${2:^ERROR}') {",
       "\t$0",
       "}"
     ]

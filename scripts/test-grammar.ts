@@ -35,8 +35,9 @@ const CASES: Case[] = [
   { what: 'event path', source: '.foo.bar = 1', token: 'foo', expect: 'variable.other.property.vrl' },
   { what: 'root path alone', source: '. = {}', token: '.', expect: 'variable.language.vrl' },
   { what: 'metadata path', source: 'x = %vector.ingest_timestamp', token: 'vector', expect: 'variable.other.metadata.vrl' },
-  { what: 'path coalescence operator', source: 'x = .foo.(a | b)', token: '|', expect: 'keyword.operator.coalesce.path.vrl' },
-  { what: 'path coalescence member', source: 'x = .foo.(a | b)', token: 'a', expect: 'variable.other.property.vrl' },
+  // Path coalescence (.foo.(a | b)) is absent from this list because it is
+  // absent from the language: removed in vrl 0.16.0, a syntax error at the
+  // pinned 0.29.0.
   { what: 'indexed path', source: 'x = .list[0]', token: '0', expect: 'constant.numeric.integer.vrl' },
   { what: 'fallible call name', source: 'x = parse_json!(.message)', token: 'parse_json', expect: 'support.function.vrl' },
   { what: 'fallible call bang', source: 'x = parse_json!(.message)', token: '!', expect: 'keyword.operator.fallible.vrl' },
@@ -116,9 +117,9 @@ const CASES: Case[] = [
     expect: 'variable.other.property.quoted.vrl',
   },
   {
-    what: 'PITFALL 4b: bracketed quoted path segment',
-    source: 'x = .["a-b"]',
-    token: 'a-b',
+    what: 'PITFALL 4b: a quoted segment on a nested path is quoted too',
+    source: 'x = .event."@timestamp"',
+    token: '@timestamp',
     expect: 'variable.other.property.quoted.vrl',
   },
   {

@@ -4,3 +4,9 @@ tsconfig.json
 out/**/*.map
 syntaxes/vrl.tmLanguage.template.json
 .vscodeignore
+
+# wasm-pack scaffolding: the .wasm and its loader ship, the rest does not.
+wasm/.gitignore
+wasm/package.json
+wasm/README.md
+wasm/*.d.ts

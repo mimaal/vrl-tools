@@ -23,7 +23,7 @@ transforms:
       }
 
       ."@timestamp" = del(.timestamp)
-      .log.level = downcase(string!(.level ?? "info"))
+      .log.level = downcase(string(.level) ?? "info")
       .http.response.status_code = to_int(.status) ?? null
 
   only_problems:

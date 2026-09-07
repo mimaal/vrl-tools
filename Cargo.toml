@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = ["crates/vrl-check-core", "crates/vrl-check-wasm"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/mimaal/vrl-tools"
+
+[workspace.dependencies]
+# Pinned exactly. This is the version Vector 0.52.0 depends on, and it is
+# surfaced to the user in the status bar: a mismatch with the Vector they run
+# in production is what turns a real diagnostic into a false positive.
+#
+# `stdlib` pulls in `compiler`, `core`, `datadog` and `parsing` on its own, so
+# the feature list below is the smallest one that still gives us the real
+# standard library. Trimming `datadog_*` out is not possible without losing it.
+vrl = { version = "=0.29.0", default-features = false, features = [
+    "compiler",
+    "core",
+    "diagnostic",
+    "parser",
+    "path",
+    "stdlib",
+    "value",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+# The .wasm ships inside the .vsix, so size beats speed: VRL compiles a program
+# in microseconds either way.
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

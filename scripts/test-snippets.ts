@@ -8,14 +8,17 @@
  * closes — the failure mode that makes a snippet paint the rest of the file
  * one colour.
  *
- * It does NOT prove the snippet compiles. That needs the real compiler, so
- * once phase 3 lands, feed these same expansions through vrl-check-core.
+ * And third, since phase 3, that the expansion actually compiles: the same
+ * bodies go through vrl-check-core by way of the wasm module the extension
+ * ships. A snippet that tokenises beautifully and then makes the compiler
+ * complain the moment it lands in the buffer is worse than no snippet.
  *
  * Run with: npm run test:snippets
  */
 
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
+import { errorsIn, vrlVersion } from './checker-harness.js';
 import { findLeakingState, findUnscopedText, loadGrammar, ROOT } from './grammar-harness.js';
 
 const SNIPPETS = path.join(ROOT, 'editors/vscode/snippets/vrl.json');
@@ -26,8 +29,16 @@ interface Snippet {
   readonly body: string[] | string;
 }
 
-/** Placeholder text used for a tabstop that has no default of its own. */
-const BARE = 'placeholder';
+/**
+ * What a tabstop with no default of its own expands to.
+ *
+ * Empty is what the editor shows before anyone types, so it is the honest
+ * choice for the tokenising pass. For the compile pass it has to be *some*
+ * expression, and `null` is the one that neither invents a field nor changes
+ * what the surrounding code does.
+ */
+const AS_TYPED = '';
+const AS_COMPILED = 'null';
 
 /**
  * Every piece of snippet syntax we use, in one alternation so that a single
@@ -41,7 +52,7 @@ const SYNTAX = /\\\$|\$\{(\d+)\|([^}]*)\|\}|\$\{(\d+):([^}]*)\}|\$\{(\d+)\}|\$(\
  * `${1:foo}` becomes `foo`, `${2|a,b|}` becomes `a`, and a mirror `$1` becomes
  * whatever tabstop 1 was defined as.
  */
-function expand(body: string): { text: string; problems: string[] } {
+function expand(body: string, fill: string): { text: string; problems: string[] } {
   const problems: string[] = [];
   const defaults = new Map<string, string>();
 
@@ -60,7 +71,7 @@ function expand(body: string): { text: string; problems: string[] } {
         return '$';
       }
       if (choiceIndex !== undefined) {
-        const first = (choices ?? '').split(',')[0] || BARE;
+        const first = (choices ?? '').split(',')[0] || fill;
         defaults.set(choiceIndex, first);
         return first;
       }
@@ -69,16 +80,16 @@ function expand(body: string): { text: string; problems: string[] } {
         return value ?? '';
       }
       if (emptyIndex !== undefined) {
-        const known = defaults.get(emptyIndex) ?? BARE;
+        const known = defaults.get(emptyIndex) ?? fill;
         defaults.set(emptyIndex, known);
         return known;
       }
 
       // A bare $n is a tabstop with no default the first time it appears, and
-      // a mirror of that tabstop afterwards. Either way it expands to nothing
+      // a mirror of that tabstop afterwards. Either way it expands to the fill
       // unless a default was declared earlier.
       const index = mirrorIndex as string;
-      const known = defaults.get(index) ?? '';
+      const known = defaults.get(index) ?? fill;
       defaults.set(index, known);
       return known;
     },
@@ -92,6 +103,10 @@ function expand(body: string): { text: string; problems: string[] } {
 }
 
 async function main(): Promise<void> {
+  // Loads the wasm module up front, so a missing build fails here with one
+  // clear message instead of on the first snippet.
+  console.log(`compiling snippets against vrl ${vrlVersion()}\n`);
+
   const grammar = await loadGrammar('source.vrl');
   const raw = JSON.parse(await readFile(SNIPPETS, 'utf8')) as Record<string, Snippet>;
   const entries = Object.entries(raw);
@@ -121,7 +136,7 @@ async function main(): Promise<void> {
     prefixes.add(snippet.prefix);
 
     const body = Array.isArray(snippet.body) ? snippet.body.join('\n') : snippet.body;
-    const { text, problems } = expand(body);
+    const { text, problems } = expand(body, AS_TYPED);
     if (problems.length > 0) {
       fail(problems.join('; '));
       continue;
@@ -136,6 +151,16 @@ async function main(): Promise<void> {
     const dark = findUnscopedText(grammar, text);
     if (dark.length > 0) {
       fail(`expansion has text carrying no scope:\n${dark.map((d) => `      ${d}`).join('\n')}`);
+      continue;
+    }
+
+    const errors = errorsIn(expand(body, AS_COMPILED).text);
+    if (errors.length > 0) {
+      fail(
+        `the expansion does not compile:\n${errors
+          .map((e) => `      line ${e.range.start.line + 1}: E${e.code} ${e.message}`)
+          .join('\n')}`,
+      );
       continue;
     }
 

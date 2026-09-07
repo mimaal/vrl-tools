@@ -1,36 +1,43 @@
 /**
  * Generates editors/vscode/syntaxes/vrl.tmLanguage.json from the template.
  *
- * The stdlib function list is never hand-written. The authoritative source is
- * `vrl::stdlib::all()`, but that needs a Rust toolchain, which is not a
- * prerequisite for phase 1. Until Rust is in the picture, this reads the same
- * information out of the published crate source: every stdlib function is a
- * type implementing `Function`, and each one declares its VRL name in
- * `fn identifier(&self) -> &'static str`.
+ * The stdlib function list is never hand-written. It comes from
+ * `vrl::stdlib::all()` by way of the `vrl-stdlib` binary in vrl-check-core —
+ * the same value the compiler resolves calls against, so the grammar cannot
+ * drift from the language.
  *
- * Swap this for a Rust binary over `vrl::stdlib::all()` once Rust is available;
- * the rest of this script does not change.
+ * This needs a Rust toolchain. That is a deliberate trade: from phase 3 on,
+ * Rust is required to build the extension anyway, and the previous route (scrape
+ * `identifier()` out of the published crate source) was a stand-in for exactly
+ * this.
  */
 
+import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import * as tar from 'tar';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
-const CACHE = path.join(ROOT, '.cache');
 const TEMPLATE = path.join(ROOT, 'editors/vscode/syntaxes/vrl.tmLanguage.template.json');
 const OUTPUT = path.join(ROOT, 'editors/vscode/syntaxes/vrl.tmLanguage.json');
 const PLACEHOLDER = '__VRL_STDLIB_FUNCTIONS__';
 
-/** Functions we know must exist. If any is missing, the extraction is wrong. */
+/** Functions we know must exist. If any is missing, the dump is wrong. */
 const CANARIES = ['parse_json', 'parse_syslog', 'to_int', 'del', 'exists', 'now', 'push'];
 
-/** Below this, assume the extraction broke rather than that the stdlib shrank. */
+/** Below this, assume the dump broke rather than that the stdlib shrank. */
 const MIN_EXPECTED = 150;
+
+interface StdlibDump {
+  readonly vrlVersion: string;
+  readonly functions: readonly { readonly name: string }[];
+}
 
 class GenerationError extends Error {}
 
@@ -46,89 +53,72 @@ async function readPinnedVersion(): Promise<string> {
   return version;
 }
 
-async function downloadCrate(version: string): Promise<string> {
-  const file = path.join(CACHE, `vrl-${version}.crate`);
-  if (existsSync(file)) {
-    return file;
-  }
-
-  const url = `https://static.crates.io/crates/vrl/vrl-${version}.crate`;
-  process.stderr.write(`Downloading ${url}\n`);
-
-  let response: Response;
-  try {
-    response = await fetch(url, { headers: { 'user-agent': 'vrl-tools-grammar-generator' } });
-  } catch (cause) {
-    throw new GenerationError(
-      `Could not reach crates.io to fetch vrl ${version}. The stdlib function ` +
-        `list cannot be generated offline, and must not be written by hand.\n  ${String(cause)}`,
-    );
-  }
-
-  if (!response.ok) {
-    throw new GenerationError(
-      `crates.io returned HTTP ${response.status} for vrl ${version}. ` +
-        'Check that the pinned version exists; note that Vector release numbers ' +
-        'are not vrl crate versions.',
-    );
-  }
-
-  const bytes = Buffer.from(await response.arrayBuffer());
-  await mkdir(CACHE, { recursive: true });
-  await writeFile(file, bytes);
-  return file;
+/**
+ * `cargo`, wherever it happens to be. A shell opened before rustup was
+ * installed has no ~/.cargo/bin on its PATH, and failing the build over that
+ * would send people looking in the wrong place.
+ */
+function cargoCandidates(): string[] {
+  const candidates = [process.env.CARGO, 'cargo', path.join(homedir(), '.cargo', 'bin', 'cargo')];
+  return candidates.filter((c): c is string => typeof c === 'string' && c.length > 0);
 }
 
-async function extractStdlibSources(crateFile: string, version: string): Promise<string> {
-  const dir = path.join(CACHE, `vrl-${version}`);
-  if (existsSync(path.join(dir, 'src/stdlib'))) {
-    return path.join(dir, 'src/stdlib');
-  }
+async function dumpStdlib(): Promise<StdlibDump> {
+  const args = ['run', '-q', '-p', 'vrl-check-core', '--bin', 'vrl-stdlib'];
+  const failures: string[] = [];
 
-  await mkdir(dir, { recursive: true });
-  await tar.x({
-    file: crateFile,
-    cwd: dir,
-    strip: 1,
-    filter: (entry) => entry.includes('/src/stdlib/'),
-  });
+  for (const cargo of cargoCandidates()) {
+    let stdout: string;
+    try {
+      ({ stdout } = await execFileAsync(cargo, args, {
+        cwd: ROOT,
+        maxBuffer: 64 * 1024 * 1024,
+      }));
+    } catch (cause) {
+      failures.push(`${cargo}: ${String(cause).split('\n')[0]}`);
+      continue;
+    }
 
-  const stdlib = path.join(dir, 'src/stdlib');
-  if (!existsSync(stdlib)) {
-    throw new GenerationError(
-      `The vrl ${version} crate has no src/stdlib directory. The crate layout ` +
-        'changed; the extraction needs updating.',
-    );
-  }
-  return stdlib;
-}
-
-async function extractIdentifiers(stdlibDir: string): Promise<string[]> {
-  const files = (await readdir(stdlibDir)).filter((f) => f.endsWith('.rs'));
-  const identifier = /fn\s+identifier\s*\(\s*&self\s*\)\s*->\s*&'static\s+str\s*\{\s*"([a-z0-9_]+)"/g;
-
-  const found = new Set<string>();
-  for (const file of files) {
-    const source = await readFile(path.join(stdlibDir, file), 'utf8');
-    for (const match of source.matchAll(identifier)) {
-      found.add(match[1]);
+    try {
+      return JSON.parse(stdout) as StdlibDump;
+    } catch (cause) {
+      throw new GenerationError(
+        `${cargo} ran but did not print JSON. The vrl-stdlib binary must write ` +
+          `only the dump to stdout.\n  ${String(cause)}`,
+      );
     }
   }
 
-  const names = [...found].sort();
+  throw new GenerationError(
+    'Could not run the vrl-stdlib binary. The stdlib list is generated from ' +
+      '`vrl::stdlib::all()` and must never be written by hand, so this is fatal.\n' +
+      'Install Rust (https://rustup.rs) or set CARGO to its path.\n' +
+      failures.map((f) => `  tried ${f}`).join('\n'),
+  );
+}
 
-  if (names.length < MIN_EXPECTED) {
+function namesFrom(dump: StdlibDump, pinnedVersion: string): string[] {
+  if (dump.vrlVersion !== pinnedVersion) {
     throw new GenerationError(
-      `Only ${names.length} stdlib functions were extracted, expected at least ` +
-        `${MIN_EXPECTED}. The identifier() pattern probably no longer matches ` +
-        'the crate source. Refusing to emit a grammar with a truncated list.',
+      `The compiled crate reports vrl ${dump.vrlVersion} but package.json pins ` +
+        `${pinnedVersion}. Bring VRL_VERSION, the workspace Cargo.toml and ` +
+        'package.json back into agreement before generating anything.',
     );
   }
 
-  const missing = CANARIES.filter((c) => !found.has(c));
+  const names = [...new Set(dump.functions.map((f) => f.name))].sort();
+
+  if (names.length < MIN_EXPECTED) {
+    throw new GenerationError(
+      `Only ${names.length} stdlib functions came back, expected at least ` +
+        `${MIN_EXPECTED}. Refusing to emit a grammar with a truncated list.`,
+    );
+  }
+
+  const missing = CANARIES.filter((c) => !names.includes(c));
   if (missing.length > 0) {
     throw new GenerationError(
-      `These stdlib functions are missing from the extraction: ${missing.join(', ')}. ` +
+      `These stdlib functions are missing from the dump: ${missing.join(', ')}. ` +
         'Refusing to emit a grammar built on incomplete data.',
     );
   }
@@ -147,9 +137,7 @@ function buildAlternation(names: string[]): string {
 
 async function main(): Promise<void> {
   const version = await readPinnedVersion();
-  const crateFile = await downloadCrate(version);
-  const stdlibDir = await extractStdlibSources(crateFile, version);
-  const names = await extractIdentifiers(stdlibDir);
+  const names = namesFrom(await dumpStdlib(), version);
 
   const template = await readFile(TEMPLATE, 'utf8');
   if (!template.includes(PLACEHOLDER)) {
@@ -161,7 +149,7 @@ async function main(): Promise<void> {
   // Provenance, so nobody edits the generated file by hand and wonders why it reverts.
   grammar.information_for_contributors = [
     'DO NOT EDIT. Generated by scripts/gen-grammar.ts from',
-    'vrl.tmLanguage.template.json plus the stdlib of the vrl crate.',
+    'vrl.tmLanguage.template.json plus vrl::stdlib::all().',
     `Pinned vrl crate version: ${version}`,
     `Stdlib functions: ${names.length}`,
     'Regenerate with: npm run gen:grammar',

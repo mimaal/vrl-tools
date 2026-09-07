@@ -14,7 +14,7 @@ heuristics. If `vector validate` would reject your program, so will this.
 | 0 | Extension scaffolding, language registration | done |
 | 1 | TextMate grammar + language configuration | done |
 | 2 | Snippets, VRL injection into Vector YAML/TOML configs | done |
-| 3 | Real compiler diagnostics via WASM | not started |
+| 3 | Real compiler diagnostics via WASM | done |
 | 4 | Hover, completion and signature help, generated from the stdlib | not started |
 | 5 | Run a program against a sample event | not started |
 
@@ -57,40 +57,87 @@ Two honest caveats:
   `vrl-tools.injectIntoYaml` setting does not exist — there is nothing it could
   do at runtime. The trigger is kept narrow instead.
 
+## Diagnostics
+
+Open a `.vrl` file and the real compiler runs on every keystroke, debounced by
+300 ms. What you see is what `vector validate` would tell you, in the place it
+happens:
+
+```vrl
+.parsed = parse_json(.message)
+#         ^^^^^^^^^^^^^^^^^^^^ E103 unhandled fallible assignment
+```
+
+- The compiler's own labels and notes arrive as related information rather than
+  being glued onto the message, so the hover stays readable and each label
+  keeps a position you can jump to.
+- Error codes with a page on <https://errors.vrl.dev> link to it.
+- The status bar shows the `vrl` version the diagnostics come from. When that
+  disagrees with the Vector running in production, so do the diagnostics, and
+  that is the first thing to check.
+
+The checker is the `vrl` crate compiled to WebAssembly, shipped inside the
+`.vsix`: no language server, no child process, no per-platform binaries. If the
+module fails to load, the extension says so and leaves highlighting and
+snippets working rather than falling back to a regex impression of a type
+checker.
+
+There is one thing it cannot know yet: the shape of `.`. The compiler is told
+the incoming event is of unknown type, which is why `parse_json(.message)` is
+fallible even when you know `.message` is a string. Feeding it a sample event
+is phase 5.
+
 ## Snippets
 
 Fourteen snippets covering the patterns that repeat in real parsers: `pjson`,
 `psyslog`, `pkv`, `pgrok`, `pregex`, `ptime`, `coerce`, `foreach`, `mapvalues`,
 `ecs`, `abortif`, `ifelse`, `ifmatch`, `iferr`. They keep the error rather than
-suppressing it with `!`, since that is the habit worth having.
+suppressing it with `!`, since that is the habit worth having. Every one of
+them is compiled by the test suite, so a snippet cannot ship code the compiler
+rejects.
 
 ## Status
 
-Early development, v0.1.0. Nothing is published to the Marketplace, but
-`npm run package` produces an installable `.vsix`. Highlighting, snippets and
-config injection work; diagnostics do not exist yet.
+Early development, v0.2.0. Nothing is published to the Marketplace, but
+`npm run package` produces an installable `.vsix`. Highlighting, snippets,
+config injection and compiler diagnostics work.
 
 Pinned to the `vrl` crate `0.29.0`, which is what Vector 0.52.0 depends on.
 
 ## Development
 
+Prerequisites:
+
+- Node 20+
+- Rust stable, `wasm-pack`, and the `wasm32-unknown-unknown` target
+- **LLVM/clang**, because the VRL standard library includes `encode_zstd` and
+  `decode_zstd`, and `zstd-sys` compiles C to reach the wasm target. Without it
+  the build stops at `failed to find tool "clang"`. On Windows:
+  `winget install LLVM.LLVM`.
+
 ```sh
 npm install
-npm run build        # generate the grammar, then compile the extension
-npm test             # grammar, injection and snippet checks
+npm run build        # grammar, then the wasm module, then the extension
+npm test             # grammar, injection, snippet and diagnostic checks
 npm run package      # build + test + a .vsix in editors/vscode/
+cargo test           # the checker itself, plus every stdlib example
 ```
 
 Install the result locally with:
 
 ```sh
-code --install-extension editors/vscode/vrl-tools-0.1.0.vsix
+code --install-extension editors/vscode/vrl-tools-0.2.0.vsix
 ```
 
-`npm test` runs three suites, all through the same Oniguruma engine VS Code
-uses: `test:grammar` (scopes and the documented pitfalls), `test:injection`
+`npm test` runs four suites. Three go through the same Oniguruma engine VS Code
+uses — `test:grammar` (scopes and the documented pitfalls), `test:injection`
 (where the embedded VRL region starts and, more importantly, stops) and
-`test:snippets` (each body expands to VRL that tokenises cleanly).
+`test:snippets` (each body expands to VRL that tokenises cleanly) — and the
+fourth, `test:diagnostics`, drives the compiled wasm module: the corpus
+programs and every block the injection grammars paint as VRL have to compile
+clean, and positions have to survive the trip through JSON. `test:snippets`
+also compiles each expansion, which is what caught two snippets that produced
+a fallible predicate the moment they landed in the buffer.
 
 Then press `F5` in VS Code to open an Extension Development Host with
 `test-corpus/` loaded.
@@ -102,6 +149,11 @@ The grammar is generated. Edit `syntaxes/vrl.tmLanguage.template.json` and run
 
 - The checker lives in `crates/vrl-check-core`, which knows nothing about WASM
   or VS Code, so it can be reused behind an LSP server later.
+- The grammar highlights the language as the pinned compiler defines it, not as
+  older documentation describes it. Path coalescence (`.foo.(a | b)`) was
+  removed in `vrl` 0.16.0 and bracketed string keys (`.["a-b"]`, whose real
+  form is `."a-b"`) were never valid, so neither is highlighted: painting them
+  as valid would contradict the error the compiler puts underneath.
 - Stdlib function lists are **generated** from the `vrl` crate at build time,
   never hand-written.
 - The `vrl` crate version is pinned exactly and shown in the status bar, since

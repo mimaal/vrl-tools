@@ -1,0 +1,183 @@
+/**
+ * Exercises the diagnostics pipeline end to end: the wasm module the .vsix
+ * ships, loaded from Node exactly as the extension loads it.
+ *
+ * The Rust tests already cover the checker itself. What only this side can
+ * cover is the boundary — that positions and notes survive the trip through
+ * JSON — and the corpus, where two questions matter:
+ *
+ *   - every `.vrl` file in test-corpus/ compiles clean, so a version bump that
+ *     changes the language fails here rather than in someone's editor;
+ *   - every region the injection grammars paint as VRL inside a Vector config
+ *     compiles clean too. Colouring something as VRL that the compiler would
+ *     reject is a promise the extension cannot keep.
+ *
+ * Run with: npm run test:diagnostics
+ */
+
+import { readdir, readFile } from 'node:fs/promises';
+import * as path from 'node:path';
+
+import { check, errorsIn, vrlVersion } from './checker-harness.js';
+import { CORPUS, embeddedRegions, loadGrammar, ROOT } from './grammar-harness.js';
+
+let failed = 0;
+
+function ok(what: string): void {
+  console.log(`ok    ${what}`);
+}
+
+function fail(what: string, detail: string): void {
+  console.error(`FAIL  ${what}\n      ${detail.split('\n').join('\n      ')}`);
+  failed++;
+}
+
+/** Describes diagnostics compactly enough to read in a test failure. */
+function describe(source: string, lineOffset = 0): string {
+  return check(source)
+    .diagnostics.map(
+      (d) =>
+        `line ${d.range.start.line + 1 + lineOffset}: ${d.severity} E${d.code} ${d.message}`,
+    )
+    .join('\n');
+}
+
+async function checkVersionAgrees(): Promise<void> {
+  const pkg = JSON.parse(await readFile(path.join(ROOT, 'package.json'), 'utf8')) as {
+    vrl?: { crateVersion?: string };
+  };
+  const pinned = pkg.vrl?.crateVersion;
+
+  if (vrlVersion() !== pinned) {
+    fail(
+      'the module reports the pinned crate version',
+      `package.json pins ${String(pinned)}, the module was built against ${vrlVersion()}.\n` +
+        'Rebuild it with: npm run build:wasm',
+    );
+    return;
+  }
+  ok(`the module is built against the pinned vrl ${vrlVersion()}`);
+}
+
+async function checkCorpusPrograms(): Promise<void> {
+  const files = (await readdir(CORPUS)).filter((f) => f.endsWith('.vrl'));
+
+  if (files.length === 0) {
+    fail('the corpus has programs to compile', 'test-corpus/ has no .vrl files');
+    return;
+  }
+
+  for (const file of files) {
+    const source = await readFile(path.join(CORPUS, file), 'utf8');
+    const result = check(source);
+
+    // Warnings count here as well as errors. The corpus is what the extension
+    // is judged against, so it has to be VRL worth copying.
+    if (result.diagnostics.length > 0) {
+      fail(`corpus ${file} compiles clean`, describe(source));
+      continue;
+    }
+    ok(`corpus ${file} compiles clean`);
+  }
+}
+
+async function checkEmbeddedPrograms(): Promise<void> {
+  const configs: readonly { file: string; scope: string }[] = [
+    { file: 'vector.yaml', scope: 'vrl.injection.yaml' },
+    { file: 'vector.toml', scope: 'vrl.injection.toml' },
+  ];
+
+  for (const { file, scope } of configs) {
+    const grammar = await loadGrammar(scope);
+    const config = await readFile(path.join(CORPUS, file), 'utf8');
+    const regions = embeddedRegions(grammar, config);
+
+    if (regions.length === 0) {
+      fail(`${file} has VRL to compile`, 'the injection grammar found no embedded region');
+      continue;
+    }
+
+    for (const region of regions) {
+      const result = check(region.source);
+      if (result.diagnostics.length > 0) {
+        fail(
+          `${file}: the VRL block at line ${region.line} compiles clean`,
+          describe(region.source, region.line - 1),
+        );
+        continue;
+      }
+      ok(`${file}: the VRL block at line ${region.line} compiles clean`);
+    }
+  }
+}
+
+function checkBoundary(): void {
+  const unhandled = errorsIn('.parsed = parse_json(.message)\n');
+  const first = unhandled[0];
+
+  if (!first) {
+    fail('an unhandled fallible assignment is an error', 'the compiler accepted it');
+  } else if (first.code !== 103) {
+    fail('an unhandled fallible assignment is E103', `got E${first.code} ${first.message}`);
+  } else if (first.range.start.line !== 0 || first.range.start.character !== 10) {
+    fail(
+      'the error underlines the call, not the whole line',
+      `expected 0:10, got ${first.range.start.line}:${first.range.start.character}`,
+    );
+  } else if (first.notes.length === 0) {
+    fail('the compiler notes survive the boundary', 'the diagnostic arrived with no notes');
+  } else if (first.documentationUrl !== 'https://errors.vrl.dev/103') {
+    fail('E103 carries its documentation link', `got ${String(first.documentationUrl)}`);
+  } else {
+    ok('an unhandled fallible assignment arrives as E103, underlined at the call');
+  }
+
+  // The line below the accents is what matters: if columns were byte offsets
+  // the squiggle would land four characters to the right of the call, and an
+  // emoji outside the BMP would push it further still.
+  const wide = '.mensaje = "café con leña 🚀"\n.y = definitely_not_a_function(.mensaje)\n';
+  const unknown = errorsIn(wide)[0];
+
+  if (!unknown) {
+    fail('an unknown function is an error', 'the compiler accepted it');
+  } else if (unknown.range.start.line !== 1 || unknown.range.start.character !== 5) {
+    fail(
+      'columns are UTF-16, not bytes',
+      `expected 1:5, got ${unknown.range.start.line}:${unknown.range.start.character}`,
+    );
+  } else {
+    ok('columns stay UTF-16 across accents and an astral-plane emoji');
+  }
+
+  // A half-written program is the normal state of a file being typed in. The
+  // module has to answer, not trap.
+  try {
+    const partial = check('.foo = \n');
+    if (partial.compiled || partial.diagnostics.length === 0) {
+      fail('a syntax error is reported', 'the compiler accepted an incomplete assignment');
+    } else {
+      ok('a half-typed program answers with a diagnostic instead of trapping');
+    }
+  } catch (error) {
+    fail('a half-typed program does not trap the module', String(error));
+  }
+}
+
+async function main(): Promise<void> {
+  console.log(`checking against vrl ${vrlVersion()}\n`);
+
+  await checkVersionAgrees();
+  await checkCorpusPrograms();
+  await checkEmbeddedPrograms();
+  checkBoundary();
+
+  console.log(`\n${failed} failed`);
+  if (failed > 0) {
+    process.exit(1);
+  }
+}
+
+main().catch((error: unknown) => {
+  console.error(String(error));
+  process.exit(1);
+});

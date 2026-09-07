@@ -173,3 +173,77 @@ export function findUnscopedText(grammar: textmate.IGrammar, source: string): st
 
   return dark;
 }
+
+/** The scope the injection grammars give to the VRL they embed. */
+export const EMBEDDED_SCOPE = 'meta.embedded.block.vrl';
+
+/** A run of lines the injection grammar decided are VRL. */
+export interface EmbeddedRegion {
+  /** 1-based line in the config file where the region starts. */
+  readonly line: number;
+  /** The VRL itself, dedented to column 0 so it can be compiled. */
+  readonly source: string;
+}
+
+/**
+ * Pulls out every region an injection grammar coloured as VRL.
+ *
+ * This is deliberately driven by the grammar rather than by a YAML or TOML
+ * parser: the question it answers is "does everything the extension paints as
+ * VRL actually compile as VRL", and the grammar is the only thing that knows
+ * what it painted.
+ */
+export function embeddedRegions(
+  grammar: textmate.IGrammar,
+  source: string,
+): EmbeddedRegion[] {
+  const regions: EmbeddedRegion[] = [];
+  let stack = textmate.INITIAL;
+  let current: string[] = [];
+  let startedAt = 0;
+
+  const close = (): void => {
+    while (current.length > 0 && current[current.length - 1].trim() === '') {
+      current.pop();
+    }
+    if (current.length > 0) {
+      regions.push({ line: startedAt, source: dedent(current) });
+    }
+    current = [];
+  };
+
+  source.split(/\r?\n/).forEach((line, i) => {
+    const result = grammar.tokenizeLine(line, stack);
+    stack = result.ruleStack;
+
+    const embedded = result.tokens.some((t) => t.scopes.includes(EMBEDDED_SCOPE));
+    if (embedded) {
+      if (current.length === 0) {
+        startedAt = i + 1;
+      }
+      current.push(line);
+      return;
+    }
+
+    // A blank line inside a block scalar carries no embedded token, but it is
+    // still part of the block; only real content ends the region.
+    if (current.length > 0 && line.trim() === '') {
+      current.push(line);
+      return;
+    }
+
+    close();
+  });
+
+  close();
+  return regions;
+}
+
+function dedent(lines: string[]): string {
+  const indents = lines
+    .filter((line) => line.trim() !== '')
+    .map((line) => line.length - line.trimStart().length);
+  const indent = indents.length > 0 ? Math.min(...indents) : 0;
+
+  return `${lines.map((line) => line.slice(indent)).join('\n')}\n`;
+}

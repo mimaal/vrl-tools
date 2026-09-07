@@ -1,0 +1,42 @@
+[package]
+name = "vrl-check-wasm"
+description = "WebAssembly wrapper around vrl-check-core, for editors without a Rust toolchain."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+# cdylib for the .wasm the extension loads; rlib so the tests below can call
+# straight into the same functions on the host.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+vrl-check-core = { path = "../vrl-check-core" }
+wasm-bindgen = "0.2"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The stdlib reaches for the system random number generator (uuid_v4, random_*),
+# and on wasm32-unknown-unknown there is no system to reach for. This tells
+# getrandom to use the host's crypto API instead, which is what makes the whole
+# standard library link at all.
+getrandom = { version = "0.2", features = ["js"] }
+
+[package.metadata.wasm-pack.profile.release]
+# The .wasm ships inside the .vsix, so squeeze it: -Oz over the whole stdlib
+# saves megabytes, and the module is loaded once per session.
+#
+# The --enable flags are not opt-ins for us, they are what rustc already emits
+# for wasm32-unknown-unknown. The wasm-opt wasm-pack bundles (binaryen 117)
+# still validates with those proposals off by default and rejects the module
+# outright ("Bulk memory operations require bulk memory"). Every one of them is
+# supported by the Node that VS Code embeds.
+wasm-opt = [
+    "-Oz",
+    "--enable-bulk-memory",
+    "--enable-mutable-globals",
+    "--enable-nontrapping-float-to-int",
+    "--enable-sign-ext",
+    "--enable-multivalue",
+    "--enable-reference-types",
+]

@@ -135,24 +135,24 @@
 
     "metadata-path": {
       "name": "variable.other.metadata.vrl",
-      "begin": "%(?=[A-Za-z_\"\\[(])",
+      "begin": "%(?=[A-Za-z_\"\\[])",
       "beginCaptures": { "0": { "name": "punctuation.definition.metadata.vrl" } },
-      "end": "(?=[^A-Za-z0-9_.\"\\[(])|$",
+      "end": "(?=[^A-Za-z0-9_.\"\\[])|$",
       "patterns": [{ "include": "#path-body" }]
     },
 
     "event-path": {
       "comment": "The lookbehind keeps this off decimal points and off a dot that follows a closing bracket.",
       "name": "variable.other.property.vrl",
-      "begin": "(?<![A-Za-z0-9_)\\]}\"'])\\.(?=[A-Za-z_\"\\[(])",
+      "begin": "(?<![A-Za-z0-9_)\\]}\"'])\\.(?=[A-Za-z_\"\\[])",
       "beginCaptures": { "0": { "name": "punctuation.accessor.vrl" } },
-      "end": "(?=[^A-Za-z0-9_.\"\\[(])|$",
+      "end": "(?=[^A-Za-z0-9_.\"\\[])|$",
       "patterns": [{ "include": "#path-body" }]
     },
 
     "root-path": {
       "name": "variable.language.vrl",
-      "match": "(?<![A-Za-z0-9_)\\]}\"'])\\.(?![A-Za-z0-9_\"\\[(])"
+      "match": "(?<![A-Za-z0-9_)\\]}\"'])\\.(?![A-Za-z0-9_\"\\[])"
     },
 
     "variable-path": {
@@ -160,11 +160,12 @@
       "name": "variable.other.property.vrl",
       "begin": "(?<=[A-Za-z0-9_)\\]}])\\.(?=[A-Za-z_\"\\[])",
       "beginCaptures": { "0": { "name": "punctuation.accessor.vrl" } },
-      "end": "(?=[^A-Za-z0-9_.\"\\[(])|$",
+      "end": "(?=[^A-Za-z0-9_.\"\\[])|$",
       "patterns": [{ "include": "#path-body" }]
     },
 
     "path-body": {
+      "comment": "There is no path coalescence here (.foo.(a | b)) on purpose: it was removed from the language in vrl 0.16.0, and the pinned compiler rejects it as a syntax error. Colouring it as valid would contradict the squiggle sitting under it.",
       "patterns": [
         {
           "comment": "Quoted segment, e.g. .\"@timestamp\" — very common in ECS logs.",
@@ -176,37 +177,12 @@
           "patterns": [{ "include": "#string-escape" }]
         },
         {
-          "comment": "Path coalescence, e.g. .foo.(a | b)",
-          "begin": "\\(",
-          "beginCaptures": { "0": { "name": "punctuation.section.coalesce.begin.vrl" } },
-          "end": "\\)",
-          "endCaptures": { "0": { "name": "punctuation.section.coalesce.end.vrl" } },
-          "patterns": [
-            { "name": "keyword.operator.coalesce.path.vrl", "match": "\\|" },
-            {
-              "name": "variable.other.property.quoted.vrl",
-              "begin": "\"",
-              "end": "\"",
-              "patterns": [{ "include": "#string-escape" }]
-            },
-            { "name": "variable.other.property.vrl", "match": "[A-Za-z_][A-Za-z0-9_]*" }
-          ]
-        },
-        {
-          "comment": "Index, e.g. .list[0] or .[\"a-b\"]",
+          "comment": "Index, e.g. .list[0]. Brackets hold an integer and nothing else: .[\"a-b\"] is a syntax error, the quoted form is .\"a-b\".",
           "begin": "\\[",
           "beginCaptures": { "0": { "name": "punctuation.definition.index.begin.vrl" } },
           "end": "\\]",
           "endCaptures": { "0": { "name": "punctuation.definition.index.end.vrl" } },
-          "patterns": [
-            { "name": "constant.numeric.integer.vrl", "match": "-?[0-9]+" },
-            {
-              "name": "variable.other.property.quoted.vrl",
-              "begin": "\"",
-              "end": "\"",
-              "patterns": [{ "include": "#string-escape" }]
-            }
-          ]
+          "patterns": [{ "name": "constant.numeric.integer.vrl", "match": "-?[0-9]+" }]
         },
         { "name": "punctuation.accessor.vrl", "match": "\\." },
         { "name": "variable.other.property.vrl", "match": "[A-Za-z_][A-Za-z0-9_]*" }

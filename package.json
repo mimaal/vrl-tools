@@ -13,12 +13,14 @@
   "scripts": {
     "gen:grammar": "tsx scripts/gen-grammar.ts",
     "compile": "npm run compile --workspace editors/vscode",
-    "build": "npm run gen:grammar && npm run compile",
+    "build:wasm": "wasm-pack build crates/vrl-check-wasm --release --target nodejs --out-dir ../../editors/vscode/wasm --out-name vrl_check_wasm",
+    "build": "npm run gen:grammar && npm run build:wasm && npm run compile",
     "watch": "npm run watch --workspace editors/vscode",
     "test:grammar": "tsx scripts/test-grammar.ts",
     "test:injection": "tsx scripts/test-injection.ts",
     "test:snippets": "tsx scripts/test-snippets.ts",
-    "test": "npm run test:grammar && npm run test:injection && npm run test:snippets",
+    "test:diagnostics": "tsx scripts/test-diagnostics.ts",
+    "test": "npm run test:grammar && npm run test:injection && npm run test:snippets && npm run test:diagnostics",
     "package": "npm run build && npm test && npm run package --workspace editors/vscode"
   },
   "devDependencies": {

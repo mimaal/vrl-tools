@@ -16,8 +16,8 @@ if err != null {
 }
 
 ."@timestamp" = del(.timestamp)
-.log.level = downcase(string!(.level ?? "info"))
-.matched = match(.message, r'^\d+ bytes$')
+.log.level = downcase(string(.level) ?? "info")
+.matched = match(to_string(.message) ?? "", r'^\d+ bytes$')
 '''
 
 [transforms.only_problems]

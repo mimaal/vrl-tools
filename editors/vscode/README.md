@@ -5,26 +5,40 @@ language used by [Vector](https://vector.dev).
 
 ## What it does today
 
+- **Diagnostics from the real compiler.** The `vrl` crate is compiled to
+  WebAssembly and shipped inside the extension, so what gets underlined in the
+  editor is what `vector validate` would reject — not a regex approximation.
+  It runs as you type, the compiler's notes and labels come through as related
+  information, and documented error codes link to
+  [errors.vrl.dev](https://errors.vrl.dev).
 - **Syntax highlighting** built for the constructs that actually show up in
-  production parsers: quoted path segments (`."@timestamp"`), path coalescence
-  (`.foo.(a | b)`), metadata paths (`%vector.ingest_timestamp`), regex (`r'…'`),
-  raw strings (`s'…'`), timestamps (`t'…'`), the fallible-call `!` told apart
-  from negation, and error destructuring (`x, err = parse_json(.message)`).
+  production parsers: quoted path segments (`."@timestamp"`), metadata paths
+  (`%vector.ingest_timestamp`), regex (`r'…'`), raw strings (`s'…'`),
+  timestamps (`t'…'`), the fallible-call `!` told apart from negation, and
+  error destructuring (`x, err = parse_json(.message)`).
 - **Highlighting inside Vector configs**: a `source:` block scalar in a YAML
   config, or a `source = '''…'''` string in a TOML one, is coloured as VRL.
 - **Snippets** for the recurring shapes: `pjson`, `psyslog`, `pkv`, `pgrok`,
   `pregex`, `ptime`, `coerce`, `foreach`, `mapvalues`, `ecs`, `abortif`,
-  `ifelse`, `ifmatch`, `iferr`.
+  `ifelse`, `ifmatch`, `iferr`. Each one is compiled by the test suite, so a
+  snippet cannot expand into code the compiler rejects.
+
+## Which VRL
+
+The extension tracks the `vrl` crate `0.29.0`, the version Vector 0.52.0
+depends on, and shows it in the status bar. A mismatch with the Vector you run
+in production is the usual source of disagreement between an editor and a
+deployment, so it is worth having on screen.
 
 ## What it does not do yet
 
-No diagnostics. When they arrive they will come from the real VRL compiler —
-the `vrl` crate compiled to WebAssembly — rather than from regexes, so that
-what the editor rejects is exactly what `vector validate` rejects.
-
-The extension will track the `vrl` crate `0.29.0`, the version Vector 0.52.0
-depends on. A mismatch with the Vector you run in production is the usual source
-of disagreement between an editor and a deployment.
+- No hover, completion or signature help. They are next, and will be generated
+  from the crate's own standard library rather than hand-written.
+- The compiler is not told the shape of your events, so `.message` has an
+  unknown type and `parse_json(.message)` is reported as fallible even when you
+  know it is a string. Handle the error, or use `!` where you are sure.
+- Diagnostics apply to `.vrl` files. VRL embedded in a Vector config is
+  highlighted but not yet compiled.
 
 ## Licence
 

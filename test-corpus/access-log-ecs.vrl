@@ -31,17 +31,19 @@ if parse_err != null {
     "success"
 }
 
-.url.query = .["query-string"] ?? null
+# A quoted segment, ECS style. Brackets index arrays, so the quoted form is
+# ."query-string" — .["query-string"] is a syntax error.
+.url.query = ."query-string"
 .user.name = if fields.user == "-" { null } else { fields.user }
-.event.duration = .duration_ms * 1000000
+.event.duration = (to_int(.duration_ms) ?? 0) * 1000000
 .event.sequence = 0
 .event.risk_score = 12.5
 
 # Metadata paths sit alongside event paths.
 %vector.ingest_timestamp = now()
-.agent.type = %vector.source_type ?? "unknown"
+.agent.type = string(%vector.source_type) ?? "unknown"
 
-.labels = map_values(object!(.labels ?? {})) -> |value| {
+.labels = map_values(object(.labels) ?? {}) -> |value| {
     downcase(to_string(value) ?? "")
 }
 
