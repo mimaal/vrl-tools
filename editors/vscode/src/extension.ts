@@ -2,11 +2,13 @@ import * as vscode from 'vscode';
 
 import { VrlChecker } from './checker';
 import { DiagnosticRunner } from './diagnostics';
+import { registerLanguageFeatures } from './language';
 
 /**
- * Diagnostics come from the real VRL compiler, compiled to WebAssembly. If that
- * module fails to load there is nothing to fall back to — a regex approximation
- * of a type checker would be worse than no diagnostics at all — so the
+ * Diagnostics, hover, completion and signature help all come from the real VRL
+ * compiler, compiled to WebAssembly. If that module fails to load there is
+ * nothing to fall back to — a regex approximation of a type checker, or a
+ * hand-written list of functions, would be worse than nothing at all — so the
  * extension says so plainly and leaves highlighting and snippets working.
  */
 export function activate(context: vscode.ExtensionContext): void {
@@ -20,7 +22,7 @@ export function activate(context: vscode.ExtensionContext): void {
     output.appendLine(`Failed to load the VRL compiler module: ${String(error)}`);
     output.appendLine('Highlighting and snippets still work; diagnostics are unavailable.');
     void vscode.window.showErrorMessage(
-      'VRL Tools could not load the VRL compiler. Diagnostics are unavailable — see the VRL Tools output channel.',
+      'VRL Tools could not load the VRL compiler. Diagnostics, hover and completion are unavailable — see the VRL Tools output channel.',
     );
     return;
   }
@@ -28,6 +30,7 @@ export function activate(context: vscode.ExtensionContext): void {
   output.appendLine(`VRL Tools activated, compiling against vrl ${checker.vrlVersion}.`);
 
   context.subscriptions.push(new DiagnosticRunner(checker, output));
+  context.subscriptions.push(...registerLanguageFeatures(checker, output));
   context.subscriptions.push(createStatusBarItem(checker.vrlVersion));
 }
 

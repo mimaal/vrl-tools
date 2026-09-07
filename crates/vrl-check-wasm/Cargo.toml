@@ -16,6 +16,12 @@ vrl-check-core = { path = "../vrl-check-core" }
 wasm-bindgen = "0.2"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+# Without a hook, a panic inside the module reaches JavaScript as
+# "RuntimeError: unreachable" with a stack of hex offsets, which says nothing.
+# With it, the message and the Rust backtrace arrive intact — the difference
+# between a diagnosable report and a shrug.
+console_error_panic_hook = "0.1"
+
 # The stdlib reaches for the system random number generator (uuid_v4, random_*),
 # and on wasm32-unknown-unknown there is no system to reach for. This tells
 # getrandom to use the host's crypto API instead, which is what makes the whole

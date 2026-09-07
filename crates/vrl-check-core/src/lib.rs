@@ -11,6 +11,7 @@
 //! accepts it — for the pinned version of the language, which is
 //! [`VRL_VERSION`].
 
+mod stdlib;
 mod text;
 
 use std::sync::OnceLock;
@@ -19,6 +20,9 @@ use serde::{Deserialize, Serialize};
 use vrl::compiler::Function;
 use vrl::diagnostic::{Diagnostic as VrlDiagnostic, DiagnosticList, Severity as VrlSeverity};
 
+pub use stdlib::{
+    stdlib, stdlib_json, Closure, Example, Function as StdlibFunction, Parameter, Stdlib,
+};
 pub use text::{LineIndex, Position, Range};
 
 /// The version of the `vrl` crate this checker compiles against.
@@ -101,7 +105,7 @@ impl From<VrlSeverity> for Severity {
 ///
 /// `vrl::stdlib::all()` boxes almost two hundred function objects on every
 /// call, and this runs on every keystroke.
-fn functions() -> &'static [Box<dyn Function>] {
+pub(crate) fn functions() -> &'static [Box<dyn Function>] {
     static FUNCTIONS: OnceLock<Vec<Box<dyn Function>>> = OnceLock::new();
     FUNCTIONS.get_or_init(vrl::stdlib::all)
 }

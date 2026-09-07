@@ -34,6 +34,23 @@ Free and open source. Full phased plan lives in @docs/PLAN.md.
   block scalar in YAML, a `source` (or dotted `*.source`) multi-line string in
   TOML.
 
+- Fallibility and return types are NOT static properties of a `vrl` function;
+  the `Function` trait has no such fields, because both depend on the argument
+  types. `crates/vrl-check-core/src/stdlib.rs` gets them by compiling one probe
+  call per function and reading `TypeDef`. The probe writes `f!(...)` on
+  purpose: a bare fallible expression does not compile, and warning 620 ("can't
+  abort infallible function") is the compiler telling us the function cannot
+  fail. Don't replace this with a table.
+- Three stdlib functions — `encode_proto`, `parse_proto`, `validate_json_schema`
+  — build their examples from `CARGO_MANIFEST_DIR` and `unwrap` it, so merely
+  calling `examples()` on them panics anywhere cargo is not running, the
+  shipped wasm included. `NOT_INTROSPECTABLE` in `stdlib.rs` keeps the dump
+  away from them. This was a real crash, not a hypothetical.
+- Completion does not insert the `!` of a fallible call, and should not start:
+  asserting turns a handled error into an aborted program, which is the user's
+  decision, and the diagnostics point at the line either way. The plan's
+  "sufijo `!` automático" is deliberately not implemented.
+
 ## Working rules
 
 - NEVER hand-write stdlib function lists. Generate them.
@@ -62,10 +79,13 @@ Free and open source. Full phased plan lives in @docs/PLAN.md.
 ## Verification
 
 - `cargo test` across the workspace before closing out a phase.
-- `npm test` runs four suites; `test:snippets` compiles every expansion and
+- `npm test` runs five suites; `test:snippets` compiles every expansion and
   `test:diagnostics` compiles the corpus, including every block the injection
   grammars paint as VRL inside a Vector config. Anything this repo shows as
-  valid VRL has to be accepted by the pinned compiler.
+  valid VRL has to be accepted by the pinned compiler. `test:analysis` covers
+  `editors/vscode/src/analysis.ts`, which is the only hand-written reader of
+  VRL in the project — it answers "where is the cursor", never "is this
+  valid" — and is therefore the only one the compiler cannot keep honest.
 - Test the extension against the real parsers in `test-corpus/`, never against
   toy examples. That corpus is generated from the `vrl` crate's stdlib examples
   at test time, plus synthetic parsers built on public log formats.

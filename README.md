@@ -15,7 +15,7 @@ heuristics. If `vector validate` would reject your program, so will this.
 | 1 | TextMate grammar + language configuration | done |
 | 2 | Snippets, VRL injection into Vector YAML/TOML configs | done |
 | 3 | Real compiler diagnostics via WASM | done |
-| 4 | Hover, completion and signature help, generated from the stdlib | not started |
+| 4 | Hover, completion and signature help, generated from the stdlib | done |
 | 5 | Run a program against a sample event | not started |
 
 ## VRL inside Vector configs
@@ -87,6 +87,42 @@ the incoming event is of unknown type, which is why `parse_json(.message)` is
 fallible even when you know `.message` is a string. Feeding it a sample event
 is phase 5.
 
+## Hover, completion and signature help
+
+The same wasm module that compiles your program also describes the standard
+library, so what the editor tells you about a function and what it checks are
+never two different versions of VRL.
+
+- **Hover** a function name for its signature, what it returns, whether the
+  call can fail, its parameters and its examples.
+- **Completion** lists every function with its return type, marks the fallible
+  ones, and expands into a call with the required parameters as tabstops —
+  including the closure for `for_each`, `map_values` and friends. After a `.`
+  it offers the event paths this file already uses, which is the cheapest
+  protection there is against writing `.hostname` in one place and
+  `.host_name` in another.
+- **Signature help** opens with the parenthesis and follows the cursor from one
+  argument to the next, including named arguments such as `format:`.
+
+Two details worth knowing:
+
+- **Fallibility comes from the compiler, not from a table.** The `Function`
+  trait has no such flag, because whether a call can fail depends on its
+  arguments. So the dump compiles one probe call per function, with an
+  argument of exactly the declared type for each parameter, and reads the
+  answer off the result. `parse_json` comes back fallible, `downcase` does not,
+  and `string(.foo)` does, because a path has no known type. Fourteen of the
+  199 functions validate their arguments at compile time and reject a
+  placeholder; those report nothing rather than a guess.
+- **Completion never inserts the `!` for you.** Asserting is a decision —
+  it turns a handled error into an aborted program — and the diagnostics
+  already point at the line either way.
+
+The crate documents prose for nine functions out of nearly two hundred; the
+descriptions on the VRL website live in Vector's cue files, not in the crate.
+Where there is no prose the hover leans on the examples, which are the ones the
+crate itself tests.
+
 ## Snippets
 
 Fourteen snippets covering the patterns that repeat in real parsers: `pjson`,
@@ -98,9 +134,10 @@ rejects.
 
 ## Status
 
-Early development, v0.2.0. Nothing is published to the Marketplace, but
+Early development, v0.3.0. Nothing is published to the Marketplace, but
 `npm run package` produces an installable `.vsix`. Highlighting, snippets,
-config injection and compiler diagnostics work.
+config injection, compiler diagnostics, hover, completion and signature help
+all work.
 
 Pinned to the `vrl` crate `0.29.0`, which is what Vector 0.52.0 depends on.
 
@@ -126,18 +163,21 @@ cargo test           # the checker itself, plus every stdlib example
 Install the result locally with:
 
 ```sh
-code --install-extension editors/vscode/vrl-tools-0.2.0.vsix
+code --install-extension editors/vscode/vrl-tools-0.3.0.vsix
 ```
 
-`npm test` runs four suites. Three go through the same Oniguruma engine VS Code
+`npm test` runs five suites. Three go through the same Oniguruma engine VS Code
 uses — `test:grammar` (scopes and the documented pitfalls), `test:injection`
 (where the embedded VRL region starts and, more importantly, stops) and
 `test:snippets` (each body expands to VRL that tokenises cleanly) — and the
 fourth, `test:diagnostics`, drives the compiled wasm module: the corpus
 programs and every block the injection grammars paint as VRL have to compile
-clean, and positions have to survive the trip through JSON. `test:snippets`
-also compiles each expansion, which is what caught two snippets that produced
-a fallible predicate the moment they landed in the buffer.
+clean, positions have to survive the trip through JSON, and the standard
+library dump has to say what the compiler says. `test:snippets` also compiles
+each expansion, which is what caught two snippets that produced a fallible
+predicate the moment they landed in the buffer. The fifth, `test:analysis`,
+covers the cursor-position reading behind hover and completion, against
+half-written lines that do not parse.
 
 Then press `F5` in VS Code to open an Extension Development Host with
 `test-corpus/` loaded.

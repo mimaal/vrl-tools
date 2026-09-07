@@ -9,6 +9,16 @@
 
 use wasm_bindgen::prelude::wasm_bindgen;
 
+/// Makes a panic inside the module arrive in JavaScript with its message and
+/// backtrace instead of as a bare `unreachable` trap.
+///
+/// `wasm-bindgen` calls this once, when the module is instantiated.
+#[wasm_bindgen(start)]
+pub fn start() {
+    #[cfg(target_arch = "wasm32")]
+    console_error_panic_hook::set_once();
+}
+
 /// Compiles `source` and returns the answer as JSON.
 ///
 /// The shape is `vrl_check_core::Check`: `compiled`, `vrlVersion` and a list of
@@ -25,6 +35,27 @@ pub fn check(source: &str, sample_event_json: Option<String>) -> String {
         // parseable answer beats trapping inside the wasm module.
         format!(
             "{{\"compiled\":false,\"vrlVersion\":\"{}\",\"diagnostics\":[],\"internalError\":{}}}",
+            vrl_check_core::VRL_VERSION,
+            serde_json_string(&error.to_string()),
+        )
+    })
+}
+
+/// The standard library as JSON, for hover, completion and signature help.
+///
+/// It comes out of the same module that compiles programs, so what the editor
+/// describes and what the editor checks can never be two different versions of
+/// the language.
+///
+/// The shape is `vrl_check_core::Stdlib`. Building it walks every function and
+/// compiles a probe call for each, so a client should ask once and keep the
+/// answer.
+#[wasm_bindgen]
+#[must_use]
+pub fn stdlib() -> String {
+    vrl_check_core::stdlib_json().unwrap_or_else(|error| {
+        format!(
+            "{{\"vrlVersion\":\"{}\",\"functions\":[],\"internalError\":{}}}",
             vrl_check_core::VRL_VERSION,
             serde_json_string(&error.to_string()),
         )
@@ -76,6 +107,14 @@ mod tests {
 
         assert!(json.contains("\"compiled\":false"), "{json}");
         assert!(json.contains("\"severity\":\"error\""), "{json}");
+    }
+
+    #[test]
+    fn the_stdlib_dump_crosses_the_boundary() {
+        let json = stdlib();
+
+        assert!(json.contains("\"parse_json\""), "the stdlib is in the dump");
+        assert!(json.contains("\"vrlVersion\""), "so is the version");
     }
 
     #[test]

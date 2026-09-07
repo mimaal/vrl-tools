@@ -34,8 +34,30 @@ export interface CheckDiagnostic {
   readonly documentationUrl: string | null;
 }
 
+/** Mirrors `vrl_check_core::Stdlib`; see editors/vscode/src/checker.ts. */
+export interface Stdlib {
+  readonly vrlVersion: string;
+  readonly functions: readonly StdlibFunction[];
+}
+
+export interface StdlibFunction {
+  readonly name: string;
+  readonly summary: string;
+  readonly usage: string;
+  readonly parameters: readonly {
+    readonly keyword: string;
+    readonly kind: string;
+    readonly required: boolean;
+  }[];
+  readonly closure: { readonly variables: readonly string[] } | null;
+  readonly returns: string | null;
+  readonly fallible: boolean | null;
+  readonly examples: readonly { readonly title: string; readonly source: string }[];
+}
+
 interface WasmModule {
   check(source: string, sampleEventJson?: string): string;
+  stdlib(): string;
   vrl_version(): string;
 }
 
@@ -77,6 +99,17 @@ export function check(source: string): Check {
 export function vrlVersion(): string {
   return load().vrl_version();
 }
+
+/**
+ * The standard library the module describes, cached: building it compiles a
+ * probe call per function.
+ */
+export function stdlib(): Stdlib {
+  cachedStdlib ??= JSON.parse(load().stdlib()) as Stdlib;
+  return cachedStdlib;
+}
+
+let cachedStdlib: Stdlib | undefined;
 
 /** Only the diagnostics that stop a program from compiling. */
 export function errorsIn(source: string): CheckDiagnostic[] {

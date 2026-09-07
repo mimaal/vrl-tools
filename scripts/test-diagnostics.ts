@@ -18,7 +18,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 
-import { check, errorsIn, vrlVersion } from './checker-harness.js';
+import { check, errorsIn, stdlib, vrlVersion } from './checker-harness.js';
 import { CORPUS, embeddedRegions, loadGrammar, ROOT } from './grammar-harness.js';
 
 let failed = 0;
@@ -163,6 +163,71 @@ function checkBoundary(): void {
   }
 }
 
+/**
+ * The standard library dump, which hover, completion and signature help are
+ * built out of. Everything asserted here is something the editor would show a
+ * person, so a wrong answer is a wrong answer on screen.
+ */
+function checkStdlib(): void {
+  const dump = stdlib();
+
+  if (dump.functions.length < 150) {
+    fail('the dump carries the whole standard library', `only ${dump.functions.length} functions`);
+    return;
+  }
+  ok(`the dump carries ${dump.functions.length} functions`);
+
+  const byName = new Map(dump.functions.map((f) => [f.name, f]));
+  const missing = ['parse_json', 'parse_syslog', 'to_int', 'del', 'exists', 'now'].filter(
+    (name) => !byName.has(name),
+  );
+  if (missing.length > 0) {
+    fail('the functions everyone uses are present', `missing: ${missing.join(', ')}`);
+  } else {
+    ok('the functions everyone uses are present');
+  }
+
+  // The one thing an editor must not get backwards.
+  const cases: readonly [string, boolean][] = [
+    ['parse_json', true],
+    ['to_int', true],
+    ['string', true],
+    ['downcase', false],
+    ['now', false],
+  ];
+  const wrong = cases.filter(([name, fallible]) => byName.get(name)?.fallible !== fallible);
+  if (wrong.length > 0) {
+    fail(
+      'fallibility comes through as the compiler sees it',
+      wrong.map(([name]) => `${name}: ${String(byName.get(name)?.fallible)}`).join(', '),
+    );
+  } else {
+    ok('fallibility comes through as the compiler sees it');
+  }
+
+  const forEach = byName.get('for_each');
+  if (forEach?.closure?.variables.join(', ') !== 'key, value') {
+    fail(
+      'a closure function suggests usable variables',
+      `for_each closure: ${JSON.stringify(forEach?.closure)}`,
+    );
+  } else {
+    ok('a closure function suggests usable variables');
+  }
+
+  // 190 functions inherit the trait's "TODO" prose. Passing it along would put
+  // the word TODO in a hover.
+  const todo = dump.functions.filter((f) => f.summary === 'TODO' || f.usage === 'TODO');
+  if (todo.length > 0) {
+    fail('the placeholder prose never reaches a hover', `${todo.length} functions carry "TODO"`);
+  } else {
+    ok('the placeholder prose never reaches a hover');
+  }
+
+  const unanswered = dump.functions.filter((f) => f.fallible === null).length;
+  ok(`${dump.functions.length - unanswered} of ${dump.functions.length} functions probed`);
+}
+
 async function main(): Promise<void> {
   console.log(`checking against vrl ${vrlVersion()}\n`);
 
@@ -170,6 +235,7 @@ async function main(): Promise<void> {
   await checkCorpusPrograms();
   await checkEmbeddedPrograms();
   checkBoundary();
+  checkStdlib();
 
   console.log(`\n${failed} failed`);
   if (failed > 0) {

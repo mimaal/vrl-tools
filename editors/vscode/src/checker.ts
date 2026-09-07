@@ -37,8 +37,46 @@ export interface VrlPosition {
   readonly character: number;
 }
 
+/**
+ * The standard library, as `vrl-check-core` describes it. Every field here
+ * comes from the compiler: the parameters from `vrl::stdlib::all()`, the
+ * return type and fallibility from compiling a probe call.
+ */
+export interface Stdlib {
+  readonly vrlVersion: string;
+  readonly functions: readonly StdlibFunction[];
+}
+
+export interface StdlibFunction {
+  readonly name: string;
+  readonly summary: string;
+  readonly usage: string;
+  readonly parameters: readonly StdlibParameter[];
+  /** Present when the function takes a closure, e.g. `for_each`. */
+  readonly closure: { readonly variables: readonly string[] } | null;
+  /** What a call returns, or null when the probe did not compile. */
+  readonly returns: string | null;
+  /** Whether a call can fail, or null when the probe did not compile. */
+  readonly fallible: boolean | null;
+  readonly examples: readonly StdlibExample[];
+}
+
+export interface StdlibParameter {
+  readonly keyword: string;
+  readonly kind: string;
+  readonly required: boolean;
+}
+
+export interface StdlibExample {
+  readonly title: string;
+  readonly source: string;
+  /** `Ok` for an example that returns a value, `Err` for one that fails. */
+  readonly result: { readonly Ok: string } | { readonly Err: string };
+}
+
 interface WasmModule {
   check(source: string, sampleEventJson?: string): string;
+  stdlib(): string;
   vrl_version(): string;
 }
 
@@ -49,6 +87,8 @@ interface WasmModule {
  * expensive part, compiling a program with it is not.
  */
 export class VrlChecker {
+  private cachedStdlib?: Stdlib;
+
   private constructor(
     private readonly wasm: WasmModule,
     readonly vrlVersion: string,
@@ -71,5 +111,16 @@ export class VrlChecker {
 
   check(source: string, sampleEventJson?: string): Check {
     return JSON.parse(this.wasm.check(source, sampleEventJson)) as Check;
+  }
+
+  /**
+   * The standard library this module compiles against.
+   *
+   * Building it walks every function and compiles a probe call for each, so it
+   * is asked for once and kept.
+   */
+  stdlib(): Stdlib {
+    this.cachedStdlib ??= JSON.parse(this.wasm.stdlib()) as Stdlib;
+    return this.cachedStdlib;
   }
 }
