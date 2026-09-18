@@ -1,0 +1,57 @@
+# Named outputs, which are the reason an edge is a port and not a node.
+#
+# A `route` has one output per route plus `_unmatched`, and a `remap` with
+# `reroute_dropped` grows a `dropped` output. A consumer names them with a dot:
+# `split.errors`, `split._unmatched`, `strict.dropped`.
+
+sources:
+  app_logs:
+    type: file
+    include:
+      - /var/log/app/*.log
+
+transforms:
+  strict:
+    type: remap
+    inputs:
+      - app_logs
+    drop_on_error: true
+    reroute_dropped: true
+    source: |-
+      .parsed = object!(parse_json!(.message))
+
+  split:
+    type: route
+    inputs:
+      - strict
+    route:
+      errors:
+        type: vrl
+        source: '.level == "error"'
+      warnings:
+        type: vrl
+        source: '.level == "warn"'
+
+sinks:
+  errors_out:
+    type: console
+    inputs:
+      - split.errors
+    encoding:
+      codec: json
+
+  warnings_out:
+    type: console
+    inputs:
+      - split.warnings
+    encoding:
+      codec: json
+
+  # Everything the route did not match, and everything that failed to parse.
+  leftovers:
+    type: console
+    inputs:
+      - split._unmatched
+      - strict.dropped
+    encoding:
+      codec: json

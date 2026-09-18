@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/vrl-check-core", "crates/vrl-check-wasm"]
+members = [
+    "crates/editor-text",
+    "crates/vector-topology",
+    "crates/vrl-check-core",
+    "crates/vrl-check-wasm",
+]
 
 [workspace.package]
 version = "0.1.0"

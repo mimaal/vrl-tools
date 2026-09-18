@@ -1,0 +1,24 @@
+# The sink names `parse`. The transform is called `parse_logs`.
+# Vector refuses to start on this; the point is to say so while it is typed.
+
+sources:
+  app_logs:
+    type: file
+    include:
+      - /var/log/app/*.log
+
+transforms:
+  parse_logs:
+    type: remap
+    inputs:
+      - app_logs
+    source: |-
+      .kind = "json"
+
+sinks:
+  out:
+    type: console
+    inputs:
+      - parse
+    encoding:
+      codec: json

@@ -8,5 +8,6 @@ repository.workspace = true
 
 [dependencies]
 vrl.workspace = true
+editor-text = { path = "../editor-text" }
 serde.workspace = true
 serde_json.workspace = true

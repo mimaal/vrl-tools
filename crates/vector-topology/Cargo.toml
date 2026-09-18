@@ -1,0 +1,26 @@
+[package]
+name = "vector-topology"
+description = "Reads a Vector configuration and works out where events go: which source, which transforms, which sink."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+editor-text = { path = "../editor-text" }
+serde.workspace = true
+
+# Both are chosen for keeping positions, because a graph nobody can click
+# through to the component is half a feature.
+#
+# saphyr rather than serde_yaml, which is published as `0.9.34+deprecated` and
+# untouched since March 2024, or serde_yaml_ng, which has not moved since May
+# 2024. yaml-rust2 is alive, but its `Yaml` carries no positions and getting
+# them means driving the event stream by hand; saphyr, from the same authors,
+# has `MarkedYaml` with byte offsets built in. It is pre-1.0 and will churn, so
+# it is pinned exactly, like the vrl crate and for the same reason.
+saphyr = "=0.0.12"
+
+# toml_edit rather than toml for the same reason as the YAML choice: the serde
+# route throws the spans away.
+toml_edit = "0.25"

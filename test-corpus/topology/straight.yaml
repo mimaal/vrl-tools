@@ -1,0 +1,33 @@
+# The simple shape: one source, two transforms in series, one sink.
+# Every other file is this plus one complication.
+
+sources:
+  app_logs:
+    type: file
+    include:
+      - /var/log/app/*.log
+
+transforms:
+  parse:
+    type: remap
+    inputs:
+      - app_logs
+    source: |-
+      .log.level = downcase(string(.level) ?? "info")
+
+  only_errors:
+    type: filter
+    inputs:
+      - parse
+    condition:
+      type: vrl
+      source: |
+        .log.level == "error"
+
+sinks:
+  out:
+    type: console
+    inputs:
+      - only_errors
+    encoding:
+      codec: json

@@ -1,6 +1,7 @@
 //! Byte offsets to editor positions.
 //!
-//! The VRL compiler reports spans as byte offsets into the source. Editors
+//! The VRL compiler reports spans as byte offsets into the source, and so do
+//! the config parsers behind the topology graph. Editors
 //! built on the Language Server Protocol — VS Code among them — address text as
 //! a zero-based line plus a column counted in **UTF-16 code units**. The two
 //! only agree while the source is pure ASCII, and log parsers are full of

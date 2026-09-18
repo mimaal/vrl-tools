@@ -1,0 +1,25 @@
+# `enrich` reads the source and nobody reads `enrich`. The events it produces
+# go nowhere. Valid enough for Vector to start, which is what makes it worth
+# catching: the pipeline runs and the work is silently discarded.
+
+sources:
+  app_logs:
+    type: file
+    include:
+      - /var/log/app/*.log
+
+transforms:
+  enrich:
+    type: remap
+    inputs:
+      - app_logs
+    source: |-
+      .enriched = true
+
+sinks:
+  out:
+    type: console
+    inputs:
+      - app_logs
+    encoding:
+      codec: json

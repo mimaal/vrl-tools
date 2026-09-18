@@ -1,0 +1,31 @@
+# `a` reads `b` and `b` reads `a`. Nothing reaches the sink, and the graph has
+# no topological order to draw.
+
+sources:
+  app_logs:
+    type: file
+    include:
+      - /var/log/app/*.log
+
+transforms:
+  a:
+    type: remap
+    inputs:
+      - b
+    source: |-
+      .a = true
+
+  b:
+    type: remap
+    inputs:
+      - a
+    source: |-
+      .b = true
+
+sinks:
+  out:
+    type: console
+    inputs:
+      - a
+    encoding:
+      codec: json

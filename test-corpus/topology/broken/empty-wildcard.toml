@@ -1,0 +1,19 @@
+# `enrich_*` matches nothing, so the sink has no inputs at all. A wildcard that
+# matches nothing reads exactly like one that matches everything, which is why
+# silence is the wrong answer here.
+
+[sources.app_logs]
+type = "file"
+include = ["/var/log/app/*.log"]
+
+[transforms.parse_logs]
+type = "remap"
+inputs = ["app_logs"]
+source = '''
+.kind = "json"
+'''
+
+[sinks.out]
+type = "console"
+inputs = ["enrich_*"]
+encoding.codec = "json"

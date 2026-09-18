@@ -14,7 +14,7 @@
 mod stdlib;
 mod run;
 pub(crate) mod sample;
-mod text;
+
 
 use std::sync::OnceLock;
 
@@ -26,7 +26,9 @@ pub use run::{run, run_json, Run};
 pub use stdlib::{
     stdlib, stdlib_json, Closure, Example, Function as StdlibFunction, Parameter, Stdlib,
 };
-pub use text::{LineIndex, Position, Range};
+// Re-exported rather than defined here: the conversion is shared with the
+// topology reader, which points at places in a Vector config the same way.
+pub use editor_text::{LineIndex, Position, Range};
 
 /// The version of the `vrl` crate this checker compiles against.
 ///

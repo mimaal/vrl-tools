@@ -1,0 +1,26 @@
+# `inputs` takes wildcards, so a sink can name a family of transforms without
+# listing them. Also a fan-out: one source feeding two transforms.
+
+[sources.app_logs]
+type = "file"
+include = ["/var/log/app/*.log"]
+
+[transforms.parse_json_logs]
+type = "remap"
+inputs = ["app_logs"]
+source = '''
+.kind = "json"
+'''
+
+[transforms.parse_text_logs]
+type = "remap"
+inputs = ["app_logs"]
+source = '''
+.kind = "text"
+'''
+
+# Matches both transforms above, and must not match the source.
+[sinks.out]
+type = "console"
+inputs = ["parse_*"]
+encoding.codec = "json"

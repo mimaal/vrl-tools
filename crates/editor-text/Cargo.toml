@@ -1,0 +1,10 @@
+[package]
+name = "editor-text"
+description = "Byte offsets to editor positions, shared by everything in this workspace that points at a place in a file."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
