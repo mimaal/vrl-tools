@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    env:
+      # Absent until a publisher exists and the secret is set; the Marketplace
+      # step is skipped rather than failing while that is true, so a tag still
+      # produces a GitHub release with an installable .vsix.
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/toolchain
+
+      - name: Build, test and package
+        run: npm run package
+
+      - name: Name the package
+        id: vsix
+        run: |
+          version=$(node -p "require('./editors/vscode/package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "path=editors/vscode/vrl-tools-$version.vsix" >> "$GITHUB_OUTPUT"
+
+      # A tag whose name disagrees with the manifest would publish a version
+      # nobody asked for, and the Marketplace has no undo.
+      - name: The tag matches the manifest
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tag="${GITHUB_REF#refs/tags/v}"
+          if [ "$tag" != "${{ steps.vsix.outputs.version }}" ]; then
+            echo "tag v$tag does not match package.json ${{ steps.vsix.outputs.version }}" >&2
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vrl-tools-${{ steps.vsix.outputs.version }}.vsix
+          path: ${{ steps.vsix.outputs.path }}
+
+      - name: GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF#refs/tags/}" \
+            "${{ steps.vsix.outputs.path }}" \
+            --title "${GITHUB_REF#refs/tags/}" \
+            --notes "Install with \`code --install-extension vrl-tools-${{ steps.vsix.outputs.version }}.vsix\`, or from the Marketplace. See CHANGELOG.md for what changed."
+
+      - name: Marketplace
+        if: startsWith(github.ref, 'refs/tags/') && env.VSCE_PAT != ''
+        working-directory: editors/vscode
+        run: npx vsce publish --no-dependencies --packagePath "vrl-tools-${{ steps.vsix.outputs.version }}.vsix"

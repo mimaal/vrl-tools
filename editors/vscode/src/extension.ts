@@ -32,7 +32,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   output.appendLine(`VRL Tools activated, compiling against vrl ${checker.vrlVersion}.`);
 
-  const status = new StatusBar(checker.vrlVersion);
+  const status = new StatusBar(checker.vrlVersion, checker.vectorRelease);
   context.subscriptions.push(status);
 
   // The store is created before the runner and told about it afterwards: a

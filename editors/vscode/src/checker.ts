@@ -101,6 +101,7 @@ interface WasmModule {
   run(source: string, eventJson: string): string;
   stdlib(): string;
   vrl_version(): string;
+  vector_release(): string;
 }
 
 /**
@@ -115,6 +116,8 @@ export class VrlChecker {
   private constructor(
     private readonly wasm: WasmModule,
     readonly vrlVersion: string,
+    /** The Vector release that ships exactly `vrlVersion`. */
+    readonly vectorRelease: string,
   ) {}
 
   /**
@@ -129,7 +132,7 @@ export class VrlChecker {
 
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const wasm = require(entry) as WasmModule;
-    return new VrlChecker(wasm, wasm.vrl_version());
+    return new VrlChecker(wasm, wasm.vrl_version(), wasm.vector_release());
   }
 
   check(source: string, sampleEventJson?: string): Check {

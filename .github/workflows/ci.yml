@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/toolchain
+
+      - name: Build
+        run: npm run build
+
+      # The grammar's function list and the third-party notices are generated
+      # from the pinned vrl crate. If a build produces something other than what
+      # is committed, the committed copy is a claim that is no longer true.
+      - name: The generated files are what is committed
+        run: git diff --exit-code -- editors/vscode/syntaxes/vrl.tmLanguage.json editors/vscode/THIRD-PARTY-NOTICES.md
+
+      - name: Extension tests
+        run: npm test
+
+      - name: Checker tests
+        run: cargo test --workspace

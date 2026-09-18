@@ -13,21 +13,47 @@
 
 use vrl_check_core::{check, Severity};
 
-/// Examples that do not compile on their own, with the reason. Each entry is
-/// the function name plus the example title, so a rename shows up as a failure
-/// here rather than silently widening the exemption.
+/// Examples that cannot compile outside the `vrl` checkout, with the reason.
 ///
-/// These three build a path to a fixture file with `CARGO_MANIFEST_DIR` at
-/// compile time and paste it into a VRL string literal. On Windows that path
-/// arrives full of backslashes, which VRL reads as escape sequences, so the
-/// example is a syntax error before the checker ever gets an opinion. The
-/// examples are fine; the way the crate embeds a host path into them is not
-/// portable.
-const NOT_SELF_CONTAINED: &[(&str, &str)] = &[
-    ("encode_proto", "message"),
-    ("parse_proto", "message"),
-    ("validate_json_schema", "valid payload"),
+/// Each entry is the function name plus the example title, so a rename shows
+/// up as a failure here rather than silently widening the exemption — which is
+/// exactly what the 0.29 -> 0.35 bump did, when `encode_proto`'s example was
+/// retitled from "message" to "Encode to proto".
+///
+/// Two different things are going on, and they are listed separately because
+/// collapsing them into "these ones fail" is how a real regression hides.
+///
+/// The first group builds a path to a fixture file with `CARGO_MANIFEST_DIR`
+/// at compile time and pastes it into a VRL string literal. On Windows that
+/// path arrives full of backslashes, which VRL reads as escape sequences, so
+/// the example is a syntax error before the checker ever gets an opinion; on
+/// other platforms it gets as far as looking for a file that is not shipped in
+/// the published crate. The examples are fine, the way they embed a host path
+/// is not portable.
+const EMBEDS_A_HOST_PATH: &[(&str, &str)] = &[
+    ("encode_proto", "Encode to proto"),
+    ("parse_proto", "Parse proto"),
+    ("validate_json_schema", "Payload contains a valid email"),
+    (
+        "validate_json_schema",
+        "Payload contains a custom format declaration, with ignore_unknown_formats set to true",
+    ),
 ];
+
+/// The second group names a fixture by a path relative to the `vrl`
+/// repository, and the function reads it while compiling, so the call is
+/// rejected with E403 anywhere that repository is not the working directory.
+/// Nothing about the example is wrong; it simply documents a feature whose
+/// input is a file on disk.
+const READS_A_REPOSITORY_FIXTURE: &[(&str, &str)] = &[
+    ("parse_groks", "Parse using aliases from file"),
+    ("parse_etld", "Parse eTLD with custom PSL"),
+];
+
+fn is_exempt(function: &str, title: &str) -> bool {
+    let entry = (function, title);
+    EMBEDS_A_HOST_PATH.contains(&entry) || READS_A_REPOSITORY_FIXTURE.contains(&entry)
+}
 
 fn is_error(source: &str) -> Option<String> {
     let result = check(source, None);
@@ -52,7 +78,7 @@ fn every_documented_example_compiles() {
                 continue;
             }
 
-            if NOT_SELF_CONTAINED.contains(&(function.identifier(), example.title)) {
+            if is_exempt(function.identifier(), example.title) {
                 continue;
             }
 

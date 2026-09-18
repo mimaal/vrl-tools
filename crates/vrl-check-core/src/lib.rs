@@ -33,7 +33,20 @@ pub use text::{LineIndex, Position, Range};
 /// Pinned exactly in the workspace manifest, and shown to the user, because a
 /// program that compiles here still fails in production if the Vector running
 /// there speaks an older VRL. `version_matches_the_pin` keeps this honest.
-pub const VRL_VERSION: &str = "0.29.0";
+pub const VRL_VERSION: &str = "0.35.0";
+
+/// The Vector release that depends on exactly [`VRL_VERSION`].
+///
+/// It is what the status bar tooltip names, because nobody deploys a `vrl`
+/// crate version — they deploy a Vector. Keeping it here rather than in the
+/// TypeScript means there is one place to change and no second copy to drift:
+/// the extension asks the module.
+///
+/// Vector's release number is not the crate's: Vector 0.58.0 is the release
+/// whose `Cargo.lock` pins `vrl` 0.35.0. Some Vector releases (0.57.0, and
+/// 0.50/0.51 before them) consume `vrl` from git `branch = main` and have no
+/// pinnable crate version at all, so they are not candidates for this pin.
+pub const VECTOR_RELEASE: &str = "0.58.0";
 
 /// Error codes with a page on <https://errors.vrl.dev>. The crate itself only
 /// links this range, and a link to a 404 is worse than no link.
@@ -517,13 +530,16 @@ mod tests {
     fn the_answer_serialises_as_camel_case_json() {
         let json = check_json(".x = 1\n", None).expect("serialises");
 
-        assert!(json.contains("\"vrlVersion\":\"0.29.0\""), "{json}");
+        assert!(json.contains(&format!("\"vrlVersion\":\"{VRL_VERSION}\"")), "{json}");
         assert!(json.contains("\"compiled\":true"), "{json}");
     }
 
     /// The pinned version appears in three places: the Cargo manifest that
     /// decides what is compiled, the constant this crate reports, and the
     /// package.json field the grammar generator reads. They must agree.
+    ///
+    /// The Vector release is checked the same way. It is the number a user
+    /// recognises, so it is the one most worth not getting wrong.
     #[test]
     fn version_matches_the_pin() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -541,6 +557,10 @@ mod tests {
         assert!(
             package.contains(&format!("\"crateVersion\": \"{VRL_VERSION}\"")),
             "package.json does not record vrl {VRL_VERSION}",
+        );
+        assert!(
+            package.contains(&format!("\"vectorRelease\": \"{VECTOR_RELEASE}\"")),
+            "package.json does not record Vector {VECTOR_RELEASE}",
         );
     }
 }

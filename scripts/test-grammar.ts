@@ -37,7 +37,7 @@ const CASES: Case[] = [
   { what: 'metadata path', source: 'x = %vector.ingest_timestamp', token: 'vector', expect: 'variable.other.metadata.vrl' },
   // Path coalescence (.foo.(a | b)) is absent from this list because it is
   // absent from the language: removed in vrl 0.16.0, a syntax error at the
-  // pinned 0.29.0.
+  // pinned 0.35.0.
   { what: 'indexed path', source: 'x = .list[0]', token: '0', expect: 'constant.numeric.integer.vrl' },
   { what: 'fallible call name', source: 'x = parse_json!(.message)', token: 'parse_json', expect: 'support.function.vrl' },
   { what: 'fallible call bang', source: 'x = parse_json!(.message)', token: '!', expect: 'keyword.operator.fallible.vrl' },

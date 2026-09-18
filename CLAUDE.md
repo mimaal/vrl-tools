@@ -11,13 +11,21 @@ Free and open source. Full phased plan lives in @docs/PLAN.md.
   so it can be wrapped in an LSP server later.
 - Monorepo: `crates/` for Rust, `editors/vscode` for the extension. This layout
   wins over the flat one sketched in phase 0 of the plan.
-- The `vrl` crate version is pinned exactly (`=0.29.0`) and surfaced in the
-  status bar. That is the version Vector 0.52.0 depends on, confirmed in
-  Vector's `Cargo.lock` at tag `v0.52.0`. Note that Vector 0.50 and 0.51
-  consume `vrl` from git `branch = main`, so they have no pinnable crate
-  version; do not "upgrade" the pin by following Vector's release numbers.
-  Vector release number != `vrl` crate version. The crate is on 0.x and has
-  never published a 0.52.0.
+- The `vrl` crate version is pinned exactly (`=0.35.0`) and surfaced in the
+  status bar. That is the version Vector 0.58.0 depends on, confirmed in
+  Vector's `Cargo.lock` at tag `v0.58.0`. The pair lives in one place —
+  `VRL_VERSION` and `VECTOR_RELEASE` in `crates/vrl-check-core/src/lib.rs` —
+  and `version_matches_the_pin` checks both against the manifests. The
+  extension asks the wasm module for them rather than keeping its own copy.
+  Vector release number != `vrl` crate version, and not every Vector release
+  is a candidate: 0.57.0, like 0.50 and 0.51 before it, consumes `vrl` from
+  git `branch = main` and has no pinnable crate version. Confirm the pair in
+  Vector's `Cargo.lock` at the tag before moving the pin; never follow
+  Vector's release numbers. The crate is on 0.x and has never published a
+  0.58.0.
+  The map as of Vector 0.58.0: 0.58.0 -> 0.35.0, 0.57.0 -> git, 0.56.0 ->
+  0.33.1, 0.55.0 -> 0.32.0, 0.54.0 -> 0.31.0, 0.53.0 -> 0.30.0, 0.52.0 ->
+  0.29.0.
 
 - The pinned compiler defines the language the grammar paints. Two constructs
   that older VRL documentation still shows are gone and must not come back:
@@ -76,6 +84,14 @@ Free and open source. Full phased plan lives in @docs/PLAN.md.
     examples.
   - The plan mentions `docs/generated` in the `vectordotdev/vrl` repo. That
     directory does not exist at the pinned tag. Don't go looking for it.
+- The third-party licence notices are generated too. The `.vsix` ships a wasm
+  module that statically links 243 crates, one of them (`vrl`) MPL-2.0, so
+  `editors/vscode/THIRD-PARTY-NOTICES.md` is part of what makes distributing it
+  lawful. `npm run gen:notices` walks the graph that actually ships
+  (`vrl-check-wasm` for `wasm32-unknown-unknown`) with `cargo about`, and fails
+  on any licence not accepted in `about.toml`. It runs inside `npm run build`,
+  and CI fails if a build changes it. Never hand-edit it, and never widen
+  `accepted` to make a build pass without reading what arrived.
 - Building the wasm needs LLVM/clang on PATH: the stdlib pulls in `zstd`, whose
   `zstd-sys` compiles C for `wasm32-unknown-unknown`. Dropping the zstd
   functions to avoid it is not an option — the compiler would then reject

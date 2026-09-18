@@ -37,7 +37,7 @@ language used by [Vector](https://vector.dev).
 
 ## Which VRL
 
-The extension tracks the `vrl` crate `0.29.0`, the version Vector 0.52.0
+The extension tracks the `vrl` crate `0.35.0`, the version Vector 0.58.0
 depends on, and shows it in the status bar. A mismatch with the Vector you run
 in production is the usual source of disagreement between an editor and a
 deployment, so it is worth having on screen.
@@ -56,4 +56,7 @@ deployment, so it is worth having on screen.
 
 ## Licence
 
-MIT. The `vrl` crate is MPL-2.0 and is consumed unmodified.
+MIT. The compiler inside it is the `vrl` crate, which is MPL-2.0 and is
+consumed unmodified; its source is at <https://github.com/vectordotdev/vrl>
+under the pinned tag. The terms of everything compiled into the WebAssembly
+module ship with the extension, in `THIRD-PARTY-NOTICES.md`.

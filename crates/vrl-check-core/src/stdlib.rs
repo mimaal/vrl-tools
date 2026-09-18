@@ -169,7 +169,7 @@ struct Probe {
 /// them landmines in the crate rather than choices here:
 ///
 /// - their examples are built at first use from `CARGO_MANIFEST_DIR` and
-///   `unwrap` it (`vrl-0.29.0/src/stdlib/encode_proto.rs:17`). That variable
+///   `unwrap` it (`vrl-0.35.0/src/stdlib/encode_proto.rs:17`). That variable
 ///   exists while cargo is running and nowhere else, so merely *reading*
 ///   `examples()` panics inside the shipped wasm module;
 /// - compiling a call to them opens a descriptor or schema file named by an

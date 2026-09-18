@@ -90,6 +90,13 @@ pub fn vrl_version() -> String {
     vrl_check_core::VRL_VERSION.to_owned()
 }
 
+/// The Vector release that ships exactly that `vrl` version.
+#[wasm_bindgen]
+#[must_use]
+pub fn vector_release() -> String {
+    vrl_check_core::VECTOR_RELEASE.to_owned()
+}
+
 /// Minimal JSON string escaping, so the fallback above cannot itself produce
 /// invalid JSON.
 fn serde_json_string(value: &str) -> String {

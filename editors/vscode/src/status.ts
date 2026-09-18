@@ -29,7 +29,10 @@ export class StatusBar implements vscode.Disposable {
   private readonly states = new Map<string, SampleState>();
   private readonly disposables: vscode.Disposable[] = [];
 
-  constructor(private readonly vrlVersion: string) {
+  constructor(
+    private readonly vrlVersion: string,
+    private readonly vectorRelease: string,
+  ) {
     this.item.command = RUN_COMMAND;
     this.disposables.push(
       vscode.window.onDidChangeActiveTextEditor(() => this.refresh()),
@@ -59,7 +62,7 @@ export class StatusBar implements vscode.Disposable {
 
     const state = this.states.get(document.uri.toString());
     const tooltip = [
-      `Diagnostics come from the vrl crate ${this.vrlVersion}, the version Vector 0.52.0 ships.`,
+      `Diagnostics come from the vrl crate ${this.vrlVersion}, the version Vector ${this.vectorRelease} ships.`,
       'A different Vector in production may disagree.',
       '',
     ];

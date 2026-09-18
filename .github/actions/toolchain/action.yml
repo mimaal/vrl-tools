@@ -1,0 +1,46 @@
+name: Toolchain
+description: >-
+  Everything a build of this repository needs: Node, Rust with the wasm target,
+  wasm-pack, cargo-about and the npm workspace installed.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: npm
+
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: wasm32-unknown-unknown
+
+    - uses: Swatinem/rust-cache@v2
+
+    # clang, because the VRL standard library includes encode_zstd/decode_zstd
+    # and zstd-sys compiles C to reach wasm32. ubuntu-latest ships it; this is
+    # only making the choice explicit, since the cc crate would otherwise reach
+    # for the host gcc, which cannot target wasm.
+    - shell: bash
+      run: |
+        echo "CC_wasm32_unknown_unknown=clang" >> "$GITHUB_ENV"
+        echo "AR_wasm32_unknown_unknown=llvm-ar" >> "$GITHUB_ENV"
+
+    # cargo install builds from source and Swatinem/rust-cache does not cover
+    # ~/.cargo/bin, so the binaries are cached by the versions pinned here.
+    - uses: actions/cache@v4
+      id: tools
+      with:
+        path: |
+          ~/.cargo/bin/wasm-pack
+          ~/.cargo/bin/cargo-about
+        key: ${{ runner.os }}-tools-wasm-pack-0.15.0-cargo-about-0.9.2
+
+    - if: steps.tools.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        cargo install wasm-pack --locked --version 0.15.0
+        cargo install cargo-about --locked --features cli --version 0.9.2
+
+    - shell: bash
+      run: npm ci

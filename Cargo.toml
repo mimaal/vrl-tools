@@ -9,21 +9,22 @@ license = "MIT"
 repository = "https://github.com/mimaal/vrl-tools"
 
 [workspace.dependencies]
-# Pinned exactly. This is the version Vector 0.52.0 depends on, and it is
+# Pinned exactly. This is the version Vector 0.58.0 depends on, and it is
 # surfaced to the user in the status bar: a mismatch with the Vector they run
 # in production is what turns a real diagnostic into a false positive.
 #
 # `stdlib` pulls in `compiler`, `core`, `datadog` and `parsing` on its own, so
 # the feature list below is the smallest one that still gives us the real
 # standard library. Trimming `datadog_*` out is not possible without losing it.
-vrl = { version = "=0.29.0", default-features = false, features = [
+vrl = { version = "=0.35.0", default-features = false, features = [
     "compiler",
-    "core",
-    "diagnostic",
-    "parser",
-    "path",
     "stdlib",
     "value",
+    "datadog",
+    "enable_env_functions",
+    "enable_system_functions",
+    "enable_crypto_functions",
+    "enable_network_functions",
 ] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
