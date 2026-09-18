@@ -20,6 +20,28 @@ First release on the Marketplace, and the first to track a current Vector.
 The rest of this release is what was missing around the extension rather than
 in it.
 
+A security review before the release turned up four things, all of them
+availability rather than exposure. The sandbox itself holds: a program in a
+`.vrl` file cannot read environment variables, reach the network, resolve a
+name or open a file, because none of those reach out of WebAssembly.
+
+- **A single trap no longer ends the session.** Around 800 nested brackets
+  overflow the stack inside the parser, and a wasm trap is final: every later
+  call into that instance throws, including the one that reports the version.
+  One module is loaded per session, so this quietly ended diagnostics, hover
+  and completion until the window was reloaded. The module is now replaced and
+  the call retried once.
+- A sample event is no longer read at all beyond 4 MB. It is read whole,
+  synchronously, on the keystroke path; a production capture saved next to a
+  program by accident used to stall the editor with nothing on screen to say
+  why. It now reports itself as unusable, like any other sample the compiler
+  cannot take.
+- Offering to create a sample no longer overwrites a file that exists but
+  could not be read.
+- The run output document builds its URI instead of parsing an interpolated
+  one, so a program whose name contains `#` or `?` no longer collides with
+  another file's results.
+
 - Third-party licence notices now ship inside the `.vsix`, as
   `THIRD-PARTY-NOTICES.md`. The checker is the `vrl` crate compiled to
   WebAssembly and `vrl` is MPL-2.0, so the terms and the pointer to the source

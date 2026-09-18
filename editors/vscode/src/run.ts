@@ -45,6 +45,13 @@ export function registerRun(
         return;
       }
 
+      if (sample.json === undefined) {
+        void vscode.window.showErrorMessage(
+          `${basename(sample.uri)} cannot be used as a sample: ${sample.unusable}`,
+        );
+        return;
+      }
+
       const result = checker.run(document.getText(), sample.json);
       output.appendLine(
         `Ran ${basename(document.uri)} against ${basename(sample.uri)}: ` +
@@ -64,7 +71,10 @@ export function registerRun(
         return;
       }
 
-      const uri = vscode.Uri.parse(`${SCHEME}:${document.uri.path}.output.jsonc`);
+      // Built rather than parsed: a program whose name contains `#` or `?`
+      // would otherwise have its path truncated at that character, and two
+      // files could land on one output document.
+      const uri = vscode.Uri.from({ scheme: SCHEME, path: `${document.uri.path}.output.jsonc` });
       results.set(uri, render(result, document.uri, sample.uri, checker.vrlVersion));
 
       const shown = await vscode.workspace.openTextDocument(uri);
@@ -99,6 +109,20 @@ async function offerToCreateSample(samples: SampleStore, program: vscode.Uri): P
   );
   if (answer !== create) {
     return;
+  }
+
+  // There being no readable sample is not the same as there being no file. A
+  // file that exists but could not be read - permissions, or a directory in
+  // its place - arrives here looking identical, and overwriting somebody's
+  // data because this code failed to read it is not a trade worth making.
+  try {
+    await vscode.workspace.fs.stat(uri);
+    void vscode.window.showWarningMessage(
+      `${basename(uri)} already exists but could not be read, so it was left alone.`,
+    );
+    return;
+  } catch {
+    // Not there, which is what the dialog said. Go on and write it.
   }
 
   const starter = `{\n  "message": "replace this with one of your events"\n}\n`;

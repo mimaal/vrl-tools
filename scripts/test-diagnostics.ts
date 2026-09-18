@@ -20,6 +20,7 @@
 
 import { readdir, readFile } from 'node:fs/promises';
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { check, errorsIn, run, stdlib, vrlVersion } from './checker-harness.js';
 import { CORPUS, embeddedRegions, loadGrammar, ROOT } from './grammar-harness.js';
@@ -363,6 +364,57 @@ function checkStdlib(): void {
   ok(`${dump.functions.length - unanswered} of ${dump.functions.length} functions probed`);
 }
 
+/**
+ * A wasm trap must not end the session.
+ *
+ * Roughly 800 nested brackets overflow the stack inside the parser. A trap is
+ * not recoverable from the inside: the instance is finished, and every later
+ * call into it throws the same `memory access out of bounds`, including
+ * `vrl_version`. One module is loaded per session, so before `VrlChecker`
+ * learned to replace it, a single such file ended diagnostics, hover and
+ * completion until the window was reloaded.
+ *
+ * This drives the extension's own class rather than the harness, because
+ * replacing the module is exactly what is under test.
+ */
+async function checkTrapRecovery(): Promise<void> {
+  const { VrlChecker } = (await import(
+    pathToFileURL(path.join(ROOT, 'editors/vscode/out/checker.js')).href
+  )) as typeof import('../editors/vscode/src/checker.js');
+
+  const checker = VrlChecker.load(path.join(ROOT, 'editors/vscode'));
+  const deep = `.a = ${'['.repeat(800)}${']'.repeat(800)}`;
+
+  if (!checker.check('.a = 1').compiled) {
+    fail('a fresh checker compiles', 'the trivial program did not compile');
+    return;
+  }
+
+  // The trap is allowed to surface here: what matters is what comes after it.
+  try {
+    checker.check(deep);
+  } catch {
+    // Expected on the way in, and swallowed on the retry inside `call`.
+  }
+
+  try {
+    if (checker.check('.a = 1').compiled) {
+      ok('a trap does not end the session');
+    } else {
+      fail('a trap does not end the session', 'the checker answered but did not compile');
+    }
+  } catch (error) {
+    fail('a trap does not end the session', `the module stayed dead: ${String(error)}`);
+  }
+
+  try {
+    checker.stdlib();
+    ok('the standard library survives a trap');
+  } catch (error) {
+    fail('the standard library survives a trap', String(error));
+  }
+}
+
 async function main(): Promise<void> {
   console.log(`checking against vrl ${vrlVersion()}\n`);
 
@@ -373,6 +425,7 @@ async function main(): Promise<void> {
   await checkEmbeddedPrograms();
   checkBoundary();
   checkStdlib();
+  await checkTrapRecovery();
 
   console.log(`\n${failed} failed`);
   if (failed > 0) {

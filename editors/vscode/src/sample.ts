@@ -19,9 +19,24 @@ import * as vscode from 'vscode';
  */
 export const SAMPLE_SUFFIX = '.sample.json';
 
+/**
+ * The largest sample that gets read.
+ *
+ * A sample is one event, which is kilobytes. This bound is not about what a
+ * sample should be, it is about what this code does with it: the file is read
+ * whole, synchronously, on the same path as the diagnostics that run while
+ * somebody types, and then handed across the wasm boundary as a string. A
+ * production dump saved next to a program by accident would otherwise stall
+ * the editor on every keystroke, with nothing on screen to say why.
+ */
+const MAX_SAMPLE_BYTES = 4 * 1024 * 1024;
+
 export interface Sample {
   readonly uri: vscode.Uri;
-  readonly json: string;
+  /** The event, absent when the file is there but cannot be used. */
+  readonly json?: string;
+  /** Why the file cannot be used, when it cannot. */
+  readonly unusable?: string;
 }
 
 interface Cached {
@@ -72,7 +87,7 @@ export class SampleStore implements vscode.Disposable {
       (document) => document.uri.fsPath === uri.fsPath && !document.isClosed,
     );
     if (open) {
-      return { uri, json: open.getText() };
+      return within(uri, open.getText());
     }
 
     let stat: fs.Stats;
@@ -80,6 +95,12 @@ export class SampleStore implements vscode.Disposable {
       stat = fs.statSync(uri.fsPath);
     } catch {
       return undefined;
+    }
+
+    // Asked of the stat rather than of the contents: the point is not to pull
+    // the file into memory at all.
+    if (stat.size > MAX_SAMPLE_BYTES) {
+      return { uri, unusable: tooLarge(stat.size) };
     }
 
     const cached = this.cache.get(uri.fsPath);
@@ -100,6 +121,24 @@ export class SampleStore implements vscode.Disposable {
     this.watcher.dispose();
     this.cache.clear();
   }
+}
+
+/**
+ * The same bound applied to a sample the editor already holds.
+ *
+ * An open document is in memory whatever this says, but the cost being
+ * avoided is not the read: it is crossing the wasm boundary with it, on
+ * every keystroke.
+ */
+function within(uri: vscode.Uri, json: string): Sample {
+  const bytes = Buffer.byteLength(json, 'utf8');
+  return bytes > MAX_SAMPLE_BYTES ? { uri, unusable: tooLarge(bytes) } : { uri, json };
+}
+
+function tooLarge(bytes: number): string {
+  const mb = (bytes / 1024 / 1024).toFixed(1);
+  const limit = MAX_SAMPLE_BYTES / 1024 / 1024;
+  return `it is ${mb} MB and the limit is ${limit} MB — a sample is one event, not a capture`;
 }
 
 /** Whether `uri` is a sample file rather than a program. */

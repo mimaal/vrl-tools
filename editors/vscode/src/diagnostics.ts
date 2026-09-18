@@ -114,18 +114,23 @@ export class DiagnosticRunner implements vscode.Disposable {
     // A sample that cannot be read is not a small problem: the file is being
     // checked against an unknown event while its author believes otherwise.
     // It goes to the status bar, and to the output channel once per change.
-    if (result.sampleError && result.sampleError !== this.reportedSampleErrors.get(document.uri.toString())) {
-      this.reportedSampleErrors.set(document.uri.toString(), result.sampleError);
+    //
+    // Two things can make it unusable and they meet here: the compiler
+    // rejecting its contents, and this side declining to read it at all.
+    const sampleError = sample?.unusable ?? result.sampleError;
+
+    if (sampleError && sampleError !== this.reportedSampleErrors.get(document.uri.toString())) {
+      this.reportedSampleErrors.set(document.uri.toString(), sampleError);
       this.output.appendLine(
-        `${document.uri.fsPath}: the sample event was ignored — ${result.sampleError}`,
+        `${document.uri.fsPath}: the sample event was ignored — ${sampleError}`,
       );
-    } else if (!result.sampleError) {
+    } else if (!sampleError) {
       this.reportedSampleErrors.delete(document.uri.toString());
     }
 
     this.status.report(document.uri, {
       typedWithSample: result.typedWithSample,
-      sampleError: result.sampleError,
+      sampleError,
       sampleName: sample ? sample.uri.path.split('/').pop() : undefined,
     });
 

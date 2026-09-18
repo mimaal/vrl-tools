@@ -6,6 +6,13 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Nothing here writes anything back: it builds, it tests, it compares. The
+# release workflow asks for contents: write because it creates a release;
+# this one has no reason to inherit whatever the repository default happens
+# to be.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest

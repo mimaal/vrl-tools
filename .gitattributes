@@ -1,0 +1,9 @@
+# Generated artefacts are compared against a fresh build in CI, so their bytes
+# have to be the same on every machine. Without this, a checkout on Windows
+# rewrites them to CRLF and the comparison fails on line endings alone.
+editors/vscode/THIRD-PARTY-NOTICES.md text eol=lf
+editors/vscode/syntaxes/vrl.tmLanguage.json text eol=lf
+
+# The template the notices are generated from, for the same reason: its own
+# line endings end up in the output.
+about.hbs text eol=lf

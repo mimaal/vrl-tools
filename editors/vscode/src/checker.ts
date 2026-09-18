@@ -114,7 +114,8 @@ export class VrlChecker {
   private cachedStdlib?: Stdlib;
 
   private constructor(
-    private readonly wasm: WasmModule,
+    private wasm: WasmModule,
+    private readonly entry: string,
     readonly vrlVersion: string,
     /** The Vector release that ships exactly `vrlVersion`. */
     readonly vectorRelease: string,
@@ -129,14 +130,47 @@ export class VrlChecker {
    */
   static load(extensionPath: string): VrlChecker {
     const entry = path.join(extensionPath, 'wasm', 'vrl_check_wasm.js');
+    const wasm = instantiate(entry);
 
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const wasm = require(entry) as WasmModule;
-    return new VrlChecker(wasm, wasm.vrl_version(), wasm.vector_release());
+    // Read once and kept: they are the only two answers that must survive the
+    // module being replaced under `call`.
+    return new VrlChecker(wasm, entry, wasm.vrl_version(), wasm.vector_release());
+  }
+
+  /**
+   * Calls into the module, replacing it if the call traps.
+   *
+   * A wasm trap is not an exception the module recovers from: the instance is
+   * finished, and every later call into it — `check`, `stdlib`, even
+   * `vrl_version` — throws the same `memory access out of bounds`. One module
+   * is loaded per session, so without this a single trap would end
+   * diagnostics, hover and completion for as long as the window stays open,
+   * and the only sign of it would be a line in an output channel nobody has
+   * open.
+   *
+   * It takes very little to get there. Around 800 nested brackets overflows
+   * the stack inside the parser, which is not something a person types but is
+   * well within what a generated file or a paste can hold.
+   *
+   * Instantiating is cheap next to losing the feature: `require` is dropped
+   * from the cache so the wrapper re-reads the bytes and builds a fresh
+   * `WebAssembly.Instance` with its own memory. The retry is single: if the
+   * new instance trips on the same input, the caller gets the error and
+   * decides, which for the diagnostics runner means leaving the file
+   * unchecked rather than looping.
+   */
+  private call(into: (wasm: WasmModule) => string): string {
+    try {
+      return into(this.wasm);
+    } catch {
+      this.wasm = instantiate(this.entry);
+      this.cachedStdlib = undefined;
+      return into(this.wasm);
+    }
   }
 
   check(source: string, sampleEventJson?: string): Check {
-    return JSON.parse(this.wasm.check(source, sampleEventJson)) as Check;
+    return JSON.parse(this.call((wasm) => wasm.check(source, sampleEventJson))) as Check;
   }
 
   /**
@@ -146,7 +180,7 @@ export class VrlChecker {
    * checker, with no filesystem and no network to reach.
    */
   run(source: string, eventJson: string): Run {
-    return JSON.parse(this.wasm.run(source, eventJson)) as Run;
+    return JSON.parse(this.call((wasm) => wasm.run(source, eventJson))) as Run;
   }
 
   /**
@@ -156,7 +190,22 @@ export class VrlChecker {
    * is asked for once and kept.
    */
   stdlib(): Stdlib {
-    this.cachedStdlib ??= JSON.parse(this.wasm.stdlib()) as Stdlib;
+    this.cachedStdlib ??= JSON.parse(this.call((wasm) => wasm.stdlib())) as Stdlib;
     return this.cachedStdlib;
   }
+}
+
+/**
+ * Loads the module, bypassing the `require` cache.
+ *
+ * `wasm-pack --target nodejs` emits a CommonJS wrapper that reads the `.wasm`
+ * and builds its `WebAssembly.Instance` at module scope, so dropping the cache
+ * entry and requiring again is what produces a new instance with new memory.
+ * Requiring without dropping it would hand back the same dead one.
+ */
+function instantiate(entry: string): WasmModule {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  delete require.cache[require.resolve(entry)];
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  return require(entry) as WasmModule;
 }

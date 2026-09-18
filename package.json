@@ -13,7 +13,7 @@
   "scripts": {
     "gen:grammar": "tsx scripts/gen-grammar.ts",
     "gen:icon": "python scripts/gen-icon.py",
-    "gen:notices": "cargo about generate about.hbs --manifest-path crates/vrl-check-wasm/Cargo.toml -o editors/vscode/THIRD-PARTY-NOTICES.md",
+    "gen:notices": "tsx scripts/gen-notices.ts",
     "compile": "npm run compile --workspace editors/vscode",
     "build:wasm": "wasm-pack build crates/vrl-check-wasm --release --target nodejs --out-dir ../../editors/vscode/wasm --out-name vrl_check_wasm",
     "build": "npm run gen:grammar && npm run gen:notices && npm run build:wasm && npm run compile",
