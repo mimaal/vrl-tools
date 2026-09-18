@@ -5,18 +5,14 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+# Enough to create the release and attach the .vsix to it. Nothing here needs
+# a Marketplace credential: see "Publishing" below.
 permissions:
   contents: write
 
 jobs:
   release:
     runs-on: ubuntu-latest
-
-    env:
-      # Absent until a publisher exists and the secret is set; the Marketplace
-      # step is skipped rather than failing while that is true, so a tag still
-      # produces a GitHub release with an installable .vsix.
-      VSCE_PAT: ${{ secrets.VSCE_PAT }}
 
     steps:
       - uses: actions/checkout@v4
@@ -32,8 +28,8 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "path=editors/vscode/vrl-tools-$version.vsix" >> "$GITHUB_OUTPUT"
 
-      # A tag whose name disagrees with the manifest would publish a version
-      # nobody asked for, and the Marketplace has no undo.
+      # A tag whose name disagrees with the manifest would produce a release
+      # nobody asked for, and a published version cannot be taken back.
       - name: The tag matches the manifest
         if: startsWith(github.ref, 'refs/tags/')
         run: |
@@ -48,6 +44,25 @@ jobs:
           name: vrl-tools-${{ steps.vsix.outputs.version }}.vsix
           path: ${{ steps.vsix.outputs.path }}
 
+      # Publishing
+      #
+      # This workflow deliberately stops at the GitHub release. The last step
+      # - uploading the .vsix to the Marketplace - is done by hand from
+      # https://marketplace.visualstudio.com/manage.
+      #
+      # `vsce publish` authenticates with an Azure DevOps Personal Access Token
+      # scoped to "All accessible organizations", which is a global PAT, and
+      # global PATs in Azure DevOps are retired on 1 December 2026. What
+      # replaces them is Entra ID with workload identity federation: a
+      # federated credential, an identity enrolled as a member of the
+      # publisher, and `vsce publish --azure-credential`. That is a reasonable
+      # amount of Azure for a project that ships every few weeks, and it would
+      # have to be built before December either way.
+      #
+      # So the artefact is produced here, reproducibly, by a machine - which
+      # was the point - and a person spends two minutes uploading it. If this
+      # ever releases often enough for that to hurt, the federation is the
+      # thing to build, not a PAT with ten weeks left on it.
       - name: GitHub release
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -56,9 +71,4 @@ jobs:
           gh release create "${GITHUB_REF#refs/tags/}" \
             "${{ steps.vsix.outputs.path }}" \
             --title "${GITHUB_REF#refs/tags/}" \
-            --notes "Install with \`code --install-extension vrl-tools-${{ steps.vsix.outputs.version }}.vsix\`, or from the Marketplace. See CHANGELOG.md for what changed."
-
-      - name: Marketplace
-        if: startsWith(github.ref, 'refs/tags/') && env.VSCE_PAT != ''
-        working-directory: editors/vscode
-        run: npx vsce publish --no-dependencies --packagePath "vrl-tools-${{ steps.vsix.outputs.version }}.vsix"
+            --notes "Install from the Marketplace, or with \`code --install-extension vrl-tools-${{ steps.vsix.outputs.version }}.vsix\` using the file below. See CHANGELOG.md for what changed."

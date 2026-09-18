@@ -74,6 +74,16 @@ Free and open source. Full phased plan lives in @docs/PLAN.md.
 - Programs run in UTC, never the machine's timezone. The machine an editor runs
   on says nothing about the machine Vector runs on.
 
+- Releases stop at the GitHub release, and the `.vsix` is uploaded to the
+  Marketplace by hand. This is not an omission. `vsce publish` needs an Azure
+  DevOps PAT scoped to "All accessible organizations" — a global PAT — and
+  global PATs are retired on 1 December 2026. The replacement is Entra ID with
+  workload identity federation and `vsce publish --azure-credential`, which is
+  a service connection, a federated credential and an identity enrolled in the
+  publisher. Do not add a `VSCE_PAT` secret and a publish step: it would work
+  for a few weeks and then fail, at the worst moment. If publishing becomes
+  frequent enough to automate, build the federation.
+
 ## Working rules
 
 - NEVER hand-write stdlib function lists. Generate them.
