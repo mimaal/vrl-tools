@@ -18,9 +18,6 @@
 //! is the intended failure: this table is a claim about Vector, and claims
 //! about someone else's software go stale.
 
-/// The output Vector gives every component, which an input names by bare ID.
-pub const DEFAULT: &str = "_default";
-
 /// The output a `route` sends events matching no route to.
 pub const UNMATCHED: &str = "_unmatched";
 

@@ -11,6 +11,10 @@
 //! output of a component rather than the component itself.
 
 pub mod config;
+pub mod graph;
 pub mod outputs;
+pub mod render;
 
 pub use config::{read_toml, read_yaml, Component, ConfigError, Input, Role};
+pub use graph::{build, Edge, Finding, Graph, Severity};
+pub use render::{diagram, document};
