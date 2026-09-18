@@ -17,14 +17,35 @@ runs:
 
     - uses: Swatinem/rust-cache@v2
 
-    # clang, because the VRL standard library includes encode_zstd/decode_zstd
-    # and zstd-sys compiles C to reach wasm32. ubuntu-latest ships it; this is
-    # only making the choice explicit, since the cc crate would otherwise reach
-    # for the host gcc, which cannot target wasm.
+    # clang and llvm-ar, because the VRL standard library includes
+    # encode_zstd/decode_zstd and zstd-sys compiles C to reach wasm32. The cc
+    # crate would otherwise reach for the host gcc, which cannot target wasm.
+    #
+    # The names are resolved rather than assumed: ubuntu-latest has clang on
+    # PATH unversioned but ships llvm-ar only as llvm-ar-<version>, and cc-rs
+    # looks for the bare name. Failing here, by name, beats cc-rs failing four
+    # minutes into a build with "failed to find tool".
     - shell: bash
       run: |
-        echo "CC_wasm32_unknown_unknown=clang" >> "$GITHUB_ENV"
-        echo "AR_wasm32_unknown_unknown=llvm-ar" >> "$GITHUB_ENV"
+        find_tool() {
+          if command -v "$1" >/dev/null 2>&1; then
+            command -v "$1"
+            return
+          fi
+          ls /usr/bin/"$1"-* 2>/dev/null | sort -V | tail -1
+        }
+
+        cc=$(find_tool clang)
+        ar=$(find_tool llvm-ar)
+        if [ -z "$cc" ] || [ -z "$ar" ]; then
+          echo "zstd-sys needs clang and llvm-ar to target wasm32." >&2
+          echo "found clang='$cc' llvm-ar='$ar'" >&2
+          exit 1
+        fi
+
+        echo "building wasm C with $cc and $ar"
+        echo "CC_wasm32_unknown_unknown=$cc" >> "$GITHUB_ENV"
+        echo "AR_wasm32_unknown_unknown=$ar" >> "$GITHUB_ENV"
 
     # cargo install builds from source and Swatinem/rust-cache does not cover
     # ~/.cargo/bin, so the binaries are cached by the versions pinned here.
