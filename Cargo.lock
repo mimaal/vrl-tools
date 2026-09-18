@@ -3378,6 +3378,7 @@ dependencies = [
  "editor-text",
  "saphyr",
  "serde",
+ "serde_json",
  "toml_edit",
 ]
 
@@ -3509,6 +3510,7 @@ version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
  "getrandom 0.2.17",
+ "vector-topology",
  "vrl-check-core",
  "wasm-bindgen",
 ]

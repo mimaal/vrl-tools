@@ -13,6 +13,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 vrl-check-core = { path = "../vrl-check-core" }
+vector-topology = { path = "../vector-topology" }
 wasm-bindgen = "0.2"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

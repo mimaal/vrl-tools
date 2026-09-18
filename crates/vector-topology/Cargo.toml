@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 editor-text = { path = "../editor-text" }
 serde.workspace = true
+serde_json.workspace = true
 
 # Both are chosen for keeping positions, because a graph nobody can click
 # through to the component is half a feature.

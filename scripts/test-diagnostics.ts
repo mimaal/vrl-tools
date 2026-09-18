@@ -22,7 +22,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { check, errorsIn, run, stdlib, vrlVersion } from './checker-harness.js';
+import { check, errorsIn, run, stdlib, topology, vrlVersion } from './checker-harness.js';
 import { CORPUS, embeddedRegions, loadGrammar, ROOT } from './grammar-harness.js';
 
 let failed = 0;
@@ -377,6 +377,93 @@ function checkStdlib(): void {
  * This drives the extension's own class rather than the harness, because
  * replacing the module is exactly what is under test.
  */
+/**
+ * The topology of the configs in `test-corpus/topology/`, across the boundary.
+ *
+ * The Rust tests already cover the resolving, in far more detail than this.
+ * What only this side can cover is that the answer survives the trip: that a
+ * null output stays null rather than arriving as the string "null", that the
+ * camelCase field names are what the extension reads, and that the document
+ * comes through with its Mermaid block intact.
+ */
+async function checkTopology(): Promise<void> {
+  const dir = path.join(CORPUS, 'topology');
+
+  const straight = topology(
+    await readFile(path.join(dir, 'straight.yaml'), 'utf8'),
+    'straight.yaml',
+  );
+  if ('error' in straight) {
+    fail('the corpus topology reads', straight.error.message);
+    return;
+  }
+
+  if (straight.findings.length === 0) {
+    ok('a working config produces no findings');
+  } else {
+    fail(
+      'a working config produces no findings',
+      straight.findings.map((f) => f.message).join('; '),
+    );
+  }
+
+  const outputs = straight.edges.map((edge) => edge.output);
+  if (outputs.every((output) => output === null)) {
+    ok('a default output crosses the boundary as null');
+  } else {
+    fail('a default output crosses the boundary as null', JSON.stringify(outputs));
+  }
+
+  const named = topology(
+    await readFile(path.join(dir, 'named-outputs.yaml'), 'utf8'),
+    'named-outputs.yaml',
+  );
+  if ('error' in named) {
+    fail('named outputs read', named.error.message);
+    return;
+  }
+
+  const dropped = named.edges.find((edge) => edge.output === 'dropped');
+  if (dropped && dropped.from === 'strict' && dropped.to === 'leftovers') {
+    ok('a named output arrives with its edge');
+  } else {
+    fail('a named output arrives with its edge', JSON.stringify(named.edges));
+  }
+
+  const route = named.components.find((component) => component.id === 'split');
+  if (route && route.namedOutputs.includes('_unmatched')) {
+    ok('namedOutputs arrives camelCased');
+  } else {
+    fail('namedOutputs arrives camelCased', JSON.stringify(route));
+  }
+
+  if (named.document.includes('```mermaid') && named.document.includes('flowchart LR')) {
+    ok('the document carries a Mermaid diagram');
+  } else {
+    fail('the document carries a Mermaid diagram', named.document.slice(0, 200));
+  }
+
+  // A TOML config goes through the other parser and has to arrive the same.
+  const wildcards = topology(
+    await readFile(path.join(dir, 'wildcards.toml'), 'utf8'),
+    'wildcards.toml',
+  );
+  if ('error' in wildcards) {
+    fail('a TOML config reads', wildcards.error.message);
+  } else if (wildcards.edges.filter((edge) => edge.to === 'out').length === 2) {
+    ok('a wildcard expands to one edge per match, in TOML');
+  } else {
+    fail('a wildcard expands to one edge per match, in TOML', JSON.stringify(wildcards.edges));
+  }
+
+  const broken = topology('sinks: [oops', 'vector.yaml');
+  if ('error' in broken) {
+    ok('a config that does not parse answers rather than throwing');
+  } else {
+    fail('a config that does not parse answers rather than throwing', 'it returned a graph');
+  }
+}
+
 async function checkTrapRecovery(): Promise<void> {
   const { VrlChecker } = (await import(
     pathToFileURL(path.join(ROOT, 'editors/vscode/out/checker.js')).href
@@ -425,6 +512,7 @@ async function main(): Promise<void> {
   await checkEmbeddedPrograms();
   checkBoundary();
   checkStdlib();
+  await checkTopology();
   await checkTrapRecovery();
 
   console.log(`\n${failed} failed`);

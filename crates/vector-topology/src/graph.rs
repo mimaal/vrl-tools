@@ -27,6 +27,7 @@ pub enum Severity {
 
 /// Something wrong with the topology.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Finding {
     pub severity: Severity,
     pub message: String,
@@ -37,6 +38,7 @@ pub struct Finding {
 
 /// One component feeding another.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Edge {
     pub from: String,
     /// The named output the events come out of, or `None` for the default one.
@@ -48,6 +50,7 @@ pub struct Edge {
 
 /// A configuration, resolved.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Graph {
     pub components: Vec<Component>,
     pub edges: Vec<Edge>,

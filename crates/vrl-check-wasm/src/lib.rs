@@ -83,6 +83,21 @@ pub fn stdlib() -> String {
     })
 }
 
+/// The topology of a Vector configuration, as JSON.
+///
+/// The shape is `vector_topology::Analysis`: the Markdown document to open,
+/// the components with their positions, the resolved edges, and the findings.
+/// A file that does not parse at all comes back as `{"error": {…}}`, so the
+/// caller has one shape to handle rather than two.
+///
+/// `file_name` chooses the parser and titles the document. A Vector config
+/// carries no marker saying whether it is YAML or TOML.
+#[wasm_bindgen]
+#[must_use]
+pub fn topology(source: &str, file_name: &str) -> String {
+    vector_topology::analyse_file_json(source, file_name)
+}
+
 /// The pinned `vrl` crate version this module was built against.
 #[wasm_bindgen]
 #[must_use]

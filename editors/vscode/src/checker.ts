@@ -96,10 +96,61 @@ export interface StdlibExample {
   readonly result: { readonly Ok: string } | { readonly Err: string };
 }
 
+/**
+ * A Vector configuration, read and resolved.
+ *
+ * The graph is not inferred: every transform and sink declares the `inputs`
+ * feeding it. Resolving what they name is the work, because an input can be a
+ * wildcard and it can name one output of a transform rather than the transform
+ * itself.
+ */
+export interface Topology {
+  /** The Markdown document, Mermaid diagram included, ready to open. */
+  readonly document: string;
+  readonly components: readonly TopologyComponent[];
+  readonly edges: readonly TopologyEdge[];
+  readonly findings: readonly TopologyFinding[];
+}
+
+export interface TopologyComponent {
+  readonly id: string;
+  readonly role: 'source' | 'transform' | 'sink';
+  readonly type: string;
+  readonly inputs: readonly { readonly text: string; readonly range: VrlRange }[];
+  /** Where the component is declared, for going to it from the graph. */
+  readonly range: VrlRange;
+  /** The outputs it offers besides its default one: a route's routes, `dropped`. */
+  readonly namedOutputs: readonly string[];
+}
+
+export interface TopologyEdge {
+  readonly from: string;
+  /** The named output the events leave by, or `null` for the default one. */
+  readonly output: string | null;
+  readonly to: string;
+  /** The `inputs` entry that declared this edge. */
+  readonly range: VrlRange;
+}
+
+export interface TopologyFinding {
+  readonly severity: 'error' | 'warning';
+  readonly message: string;
+  readonly range: VrlRange;
+}
+
+/** A config that did not parse at all. */
+export interface TopologyError {
+  readonly error: {
+    readonly message: string;
+    readonly range: VrlRange | null;
+  };
+}
+
 interface WasmModule {
   check(source: string, sampleEventJson?: string): string;
   run(source: string, eventJson: string): string;
   stdlib(): string;
+  topology(source: string, fileName: string): string;
   vrl_version(): string;
   vector_release(): string;
 }
@@ -181,6 +232,22 @@ export class VrlChecker {
    */
   run(source: string, eventJson: string): Run {
     return JSON.parse(this.call((wasm) => wasm.run(source, eventJson))) as Run;
+  }
+
+  /**
+   * The topology of a Vector configuration.
+   *
+   * `fileName` chooses the parser and titles the document: a Vector config
+   * carries no marker saying whether it is YAML or TOML.
+   *
+   * A file that does not parse comes back as a `TopologyError` rather than by
+   * throwing, because a config being written does not parse most of the time
+   * and that is not exceptional.
+   */
+  topology(source: string, fileName: string): Topology | TopologyError {
+    return JSON.parse(this.call((wasm) => wasm.topology(source, fileName))) as
+      | Topology
+      | TopologyError;
   }
 
   /**

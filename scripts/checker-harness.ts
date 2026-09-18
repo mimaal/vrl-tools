@@ -21,6 +21,29 @@ export interface Check {
   readonly diagnostics: readonly CheckDiagnostic[];
 }
 
+/** Mirrors `vector_topology::Analysis`, or the error shape it answers with. */
+export type TopologyResult = Topology | { readonly error: { readonly message: string } };
+
+export interface Topology {
+  readonly document: string;
+  readonly components: readonly {
+    readonly id: string;
+    readonly role: 'source' | 'transform' | 'sink';
+    readonly type: string;
+    readonly namedOutputs: readonly string[];
+  }[];
+  readonly edges: readonly {
+    readonly from: string;
+    readonly output: string | null;
+    readonly to: string;
+  }[];
+  readonly findings: readonly {
+    readonly severity: 'error' | 'warning';
+    readonly message: string;
+    readonly range: { readonly start: { readonly line: number } };
+  }[];
+}
+
 /** Mirrors `vrl_check_core::Run`. */
 export interface RunResult {
   readonly compiled: boolean;
@@ -73,6 +96,7 @@ export interface StdlibFunction {
 interface WasmModule {
   check(source: string, sampleEventJson?: string): string;
   run(source: string, eventJson: string): string;
+  topology(source: string, fileName: string): string;
   stdlib(): string;
   vrl_version(): string;
 }
@@ -114,6 +138,11 @@ export function check(source: string, sampleEventJson?: string): Check {
 /** Compiles `source` against `eventJson` and runs it. */
 export function run(source: string, eventJson: string): RunResult {
   return JSON.parse(load().run(source, eventJson)) as RunResult;
+}
+
+/** Reads a Vector configuration and resolves its topology. */
+export function topology(source: string, fileName: string): TopologyResult {
+  return JSON.parse(load().topology(source, fileName)) as TopologyResult;
 }
 
 /** The pinned `vrl` crate version the module was built against. */

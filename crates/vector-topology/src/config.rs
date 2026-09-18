@@ -46,6 +46,7 @@ impl Role {
 /// separate job, and because what somebody typed is what has to be underlined
 /// when it resolves to nothing.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Input {
     pub text: String,
     pub range: Range,
@@ -53,6 +54,7 @@ pub struct Input {
 
 /// A source, transform or sink.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Component {
     pub id: String,
     pub role: Role,

@@ -83,6 +83,12 @@
         "title": "Run on sample event",
         "category": "VRL",
         "enablement": "editorLangId == vrl"
+      },
+      {
+        "command": "vrl-tools.showPipelineGraph",
+        "title": "Show pipeline graph",
+        "category": "VRL",
+        "enablement": "editorLangId == yaml || editorLangId == toml"
       }
     ],
     "menus": {
@@ -90,6 +96,11 @@
         {
           "command": "vrl-tools.runOnSampleEvent",
           "when": "editorLangId == vrl",
+          "group": "navigation"
+        },
+        {
+          "command": "vrl-tools.showPipelineGraph",
+          "when": "editorLangId == yaml || editorLangId == toml",
           "group": "navigation"
         }
       ]
