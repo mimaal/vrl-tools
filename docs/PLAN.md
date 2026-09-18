@@ -288,6 +288,70 @@ resultado antes que la elegancia.
 
 ---
 
+## Fase 6 — Grafo de topología desde el config de Vector (v0.6.0)
+
+Decidida el 2026-09-18, después de publicar la 0.5.0. Adelanta a la Fase 7 el
+ajuste `targetVectorVersion`.
+
+La idea: abrir un `vector.toml` o `vector.yaml` y ver por dónde pasa un evento
+— qué source lo produce, por qué transforms cruza, en qué sink acaba.
+
+### Lo que ya está comprobado
+
+- **Vector lo hace a medias.** `vector graph --config …` genera DOT para
+  Graphviz. Necesita el binario y te saca del editor, pero confirma que la
+  topología es derivable del config y no una invención nuestra.
+- **El grafo está declarado.** Cada transform y sink lleva `inputs` con los IDs
+  de quien le da de comer. Es un DAG explícito, no algo a inferir.
+- **Se dibuja sin webview.** La vista previa de Markdown de VS Code renderiza
+  Mermaid en bloques ```mermaid, de serie y sin extensiones. Así que la salida
+  es un documento normal, como ya hace `run`: diffable, copiable, y renderizado
+  también por GitHub, con lo que sirve de documentación del pipeline en el
+  repositorio.
+
+### Lo que cuesta, que no es dibujar
+
+1. **Comodines.** `inputs = ["parse-*"]` es válido. Hay que expandirlos, y un
+   patrón que no casa con nada es un hallazgo, no un silencio.
+2. **Salidas con nombre.** Un `route` no tiene una salida sino una por ruta,
+   más `<nombre>._unmatched` salvo que `reroute_unmatched` sea `false`; un
+   `remap` con `reroute_dropped` añade `<nombre>.dropped`. Las aristas son
+   puerto→nodo, y ahí está justo la pregunta interesante: por qué transform
+   pasa un evento y por cuál no. Confirmar contra la doc de cada tipo de
+   componente antes de implementar; no deducirlo.
+3. **Configs repartidos.** Vector fusiona un directorio entero de ficheros.
+
+### De dónde sale la verdad
+
+Del config, leído con un parser de TOML/YAML de verdad. Eso no contradice la
+regla de no usar heurísticas: leer una estructura declarativa con su parser no
+es adivinar. Pero aquí no hay compilador que nos corrija como con VRL, así que
+el límite se declara: **el grafo muestra lo que el config declara**, y lo que
+no se pueda resolver se dice, no se rellena.
+
+### Alcance de la primera versión
+
+Comando que produce el documento Mermaid, más las comprobaciones de topología,
+que es lo que `vector graph` no da:
+
+- un `inputs` que apunta a un ID que no existe;
+- un componente que nadie lee (transform huérfano, source sin consumidores);
+- un comodín que no casa con nada;
+- un ciclo.
+
+Los dos ficheros de `test-corpus/` no tienen `inputs` en sus transforms —
+existen solo para la gramática — así que las comprobaciones los rechazarían hoy.
+Hacen falta configs de corpus con topología real, sintéticos como los demás.
+
+### Lo que viene después, no ahora
+
+Pintar en el grafo qué `remap` del pipeline no compila, usando el wasm que ya
+está dentro. Dibujar la topología *y* señalar el E103 del tercer transform no lo
+hace nadie. Requiere compilar cada bloque embebido y mapear posiciones dentro
+del YAML/TOML, que es trabajo aparte.
+
+---
+
 ## Empaquetado y distribución
 
 - `vsce package` → `.vsix` instalable en local (`code --install-extension`). Con esto ya
