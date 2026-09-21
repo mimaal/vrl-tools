@@ -110,6 +110,7 @@ interface WasmModule {
   run(source: string, eventJson: string, enrichmentTables?: string[]): string;
   topology(source: string, fileName: string): string;
   enrichment_tables(source: string, fileName: string): string[] | undefined;
+  topology_files(filesJson: string, title: string): string;
   stdlib(): string;
   vrl_version(): string;
 }
@@ -167,6 +168,17 @@ export function run(
 /** The enrichment table names a Vector config declares, or undefined if it does not parse. */
 export function enrichmentTables(source: string, fileName: string): string[] | undefined {
   return load().enrichment_tables(source, fileName);
+}
+
+/** Reads a pipeline split across files, each a complete config, as one topology. */
+export function topologyFiles(
+  files: readonly { name: string; source: string }[],
+  title: string,
+): Topology & { readonly files: readonly string[]; readonly unreadable: readonly unknown[] } {
+  return JSON.parse(load().topology_files(JSON.stringify(files), title)) as Topology & {
+    readonly files: readonly string[];
+    readonly unreadable: readonly unknown[];
+  };
 }
 
 /** Reads a Vector configuration and resolves its topology. */

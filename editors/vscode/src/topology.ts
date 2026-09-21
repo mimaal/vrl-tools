@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 
 import type { Topology, VrlChecker, VrlRange } from './checker';
+import { CONFIG_GLOB, PIPELINE_SETTING, pipelineOf, sameFile } from './pipeline';
+import type { Pipeline, PipelineFile } from './pipeline';
 
 /**
  * `VRL: Show pipeline graph` — where events go in a Vector config.
@@ -145,22 +147,47 @@ function activeConfig(): vscode.TextDocument | undefined {
   return editor.document;
 }
 
+/**
+ * Reads the pipeline `document` belongs to, every file of it. See
+ * `pipelineOf` for which files those are.
+ */
+async function analyse(
+  checker: VrlChecker,
+  document: vscode.TextDocument,
+): Promise<{ pipeline: Pipeline; analysis: Topology }> {
+  const pipeline = await pipelineOf(document);
+  const files = pipeline.files.map((file) => ({
+    // The name picks the parser, so a file without a telling extension (an
+    // untitled one) is named for its language instead.
+    name: sameFile(file.uri, document.uri) ? relativeConfigName(file.name, document) : file.name,
+    source: file.source,
+  }));
+  return { pipeline, analysis: checker.topologyFiles(files, pipeline.title) };
+}
+
+/** A file's name as given, with its format appended when the name has none. */
+function relativeConfigName(name: string, document: vscode.TextDocument): string {
+  return CONFIG_FILE.test(name) ? name : (configName(document) ?? name);
+}
+
 async function exportMarkdown(
   checker: VrlChecker,
   exported: GraphDocuments,
   document: vscode.TextDocument,
 ): Promise<void> {
-  const name = basename(document.uri);
-  const result = checker.topology(document.getText(), configName(document) ?? name);
-  if ('error' in result) {
-    void vscode.window.showErrorMessage(`${name} could not be read: ${result.error.message}`);
+  const { analysis } = await analyse(checker, document);
+  if (analysis.unreadable.length > 0) {
+    const first = analysis.unreadable[0];
+    void vscode.window.showErrorMessage(
+      `${analysis.files[first.file]} could not be read: ${first.message}`,
+    );
     return;
   }
 
   // Built rather than parsed: a config whose name contains `#` or `?` would
   // otherwise have its path truncated at that character.
   const uri = vscode.Uri.from({ scheme: SCHEME, path: `${document.uri.path}.graph.md` });
-  exported.set(uri, result.document);
+  exported.set(uri, analysis.document);
   await vscode.commands.executeCommand('markdown.showPreviewToSide', uri);
 }
 
@@ -168,19 +195,28 @@ async function exportMarkdown(
 type FromWebview =
   | { readonly type: 'ready' }
   | { readonly type: 'export' }
-  | { readonly type: 'reveal'; readonly range: VrlRange };
+  | { readonly type: 'reveal'; readonly range: VrlRange; readonly file: number };
 
 /**
  * The one graph panel.
  *
  * One rather than one per config: the panel follows whichever Vector config
- * is in front, the way the Markdown preview follows the active file, so
- * switching between `sources.yaml` and `sinks.yaml` does not pile up tabs.
+ * is in front, the way the Markdown preview follows the active file. What it
+ * draws is the whole pipeline that config belongs to, so moving between the
+ * files of one pipeline keeps the same graph, and editing any of them redraws
+ * it.
  */
 class GraphPanel implements vscode.Disposable {
   private panel: vscode.WebviewPanel | undefined;
+  /** The config the graph was opened from; its pipeline is what is drawn. */
   private shown: vscode.TextDocument | undefined;
+  /** The files of the pipeline last drawn, in the order the analysis numbers them. */
+  private files: readonly PipelineFile[] = [];
+  /** Whether a complete graph has been drawn since the panel opened. */
+  private drawn = false;
   private pending: NodeJS.Timeout | undefined;
+  /** The draw in flight, so a burst of edits does not interleave reads. */
+  private generation = 0;
   private readonly disposables: vscode.Disposable[] = [];
 
   constructor(
@@ -189,9 +225,18 @@ class GraphPanel implements vscode.Disposable {
     private readonly extensionUri: vscode.Uri,
     private readonly onExport: (document: vscode.TextDocument) => Promise<void>,
   ) {
+    const watcher = vscode.workspace.createFileSystemWatcher(CONFIG_GLOB);
+    const onDisk = (): void => {
+      if (this.panel) this.schedule(false);
+    };
     this.disposables.push(
+      watcher,
+      // A file of the pipeline created, deleted or changed outside the editor.
+      watcher.onDidCreate(onDisk),
+      watcher.onDidDelete(onDisk),
+      watcher.onDidChange(onDisk),
       vscode.workspace.onDidChangeTextDocument((event) => {
-        if (event.document === this.shown) {
+        if (this.panel && this.belongs(event.document)) {
           this.schedule(false);
         }
       }),
@@ -200,10 +245,19 @@ class GraphPanel implements vscode.Disposable {
           this.panel &&
           editor &&
           editor.document !== this.shown &&
+          !this.files.some((file) => sameFile(file.uri, editor.document.uri)) &&
           isVectorConfig(this.checker, editor.document)
         ) {
+          // A config from another pipeline, or one opened on its own.
           this.shown = editor.document;
-          this.post(true);
+          this.drawn = false;
+          void this.post(true);
+        }
+      }),
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (this.panel && event.affectsConfiguration(`vrl-tools.${PIPELINE_SETTING}`)) {
+          this.drawn = false;
+          void this.post(true);
         }
       }),
     );
@@ -214,14 +268,26 @@ class GraphPanel implements vscode.Disposable {
     return this.panel ? this.shown : undefined;
   }
 
+  /** Whether an edit to `document` can change the graph on screen. */
+  private belongs(document: vscode.TextDocument): boolean {
+    return (
+      document === this.shown ||
+      this.files.some((file) => sameFile(file.uri, document.uri)) ||
+      // A config that becomes one by being typed into joins a guessed pipeline.
+      CONFIG_FILE.test(document.uri.path)
+    );
+  }
+
   show(document: vscode.TextDocument): void {
-    const changed = document !== this.shown;
+    const changed =
+      document !== this.shown && !this.files.some((file) => sameFile(file.uri, document.uri));
     this.shown = document;
 
     if (this.panel) {
       this.panel.reveal(vscode.ViewColumn.Beside, true);
       if (changed) {
-        this.post(true);
+        this.drawn = false;
+        void this.post(true);
       }
       return;
     }
@@ -235,6 +301,7 @@ class GraphPanel implements vscode.Disposable {
     );
     this.panel.iconPath = vscode.Uri.joinPath(media, 'icon.png');
     this.panel.webview.html = html(this.panel.webview, media);
+    this.drawn = false;
 
     this.panel.webview.onDidReceiveMessage(
       (message: FromWebview) => this.receive(message),
@@ -243,6 +310,7 @@ class GraphPanel implements vscode.Disposable {
     );
     this.panel.onDidDispose(() => {
       this.panel = undefined;
+      this.files = [];
       clearTimeout(this.pending);
     });
   }
@@ -254,28 +322,30 @@ class GraphPanel implements vscode.Disposable {
     }
     switch (message.type) {
       case 'ready':
-        this.post(true);
+        void this.post(true);
         break;
       case 'export':
         void this.onExport(document);
         break;
-      case 'reveal':
-        void this.reveal(document, message.range);
+      case 'reveal': {
+        const file = this.files[message.file];
+        void this.reveal(file ? file.uri : document.uri, message.range);
         break;
+      }
     }
   }
 
-  private async reveal(document: vscode.TextDocument, range: VrlRange): Promise<void> {
+  private async reveal(uri: vscode.Uri, range: VrlRange): Promise<void> {
     const target = new vscode.Range(
       range.start.line,
       range.start.character,
       range.end.line,
       range.end.character,
     );
-    // Back in the column the config is already open in, rather than a new
-    // tab on top of the graph.
-    const visible = vscode.window.visibleTextEditors.find((e) => e.document === document);
-    const editor = await vscode.window.showTextDocument(document, {
+    // Back in the column a config is already open in, rather than a new tab
+    // on top of the graph.
+    const visible = vscode.window.visibleTextEditors.find((e) => sameFile(e.document.uri, uri));
+    const editor = await vscode.window.showTextDocument(uri, {
       viewColumn: visible?.viewColumn ?? vscode.ViewColumn.One,
       selection: target,
     });
@@ -284,32 +354,53 @@ class GraphPanel implements vscode.Disposable {
 
   private schedule(refit: boolean): void {
     clearTimeout(this.pending);
-    this.pending = setTimeout(() => this.post(refit), DEBOUNCE_MS);
+    this.pending = setTimeout(() => void this.post(refit), DEBOUNCE_MS);
   }
 
-  private post(refit: boolean): void {
+  private async post(refit: boolean): Promise<void> {
     const document = this.shown;
     if (!this.panel || !document) {
       return;
     }
+    const generation = ++this.generation;
 
-    const name = basename(document.uri);
-    this.panel.title = `Graph: ${name}`;
-
-    let result: Topology | { error: { message: string } };
+    let result: { pipeline: Pipeline; analysis: Topology };
     try {
-      result = this.checker.topology(document.getText(), configName(document) ?? name);
+      result = await analyse(this.checker, document);
     } catch (error) {
       this.output.appendLine(`Graphing ${document.uri.fsPath} failed: ${String(error)}`);
       return;
     }
-
-    if ('error' in result) {
-      void this.panel.webview.postMessage({ type: 'unreadable', message: result.error.message });
+    // A later edit started another draw while this one was reading files.
+    if (generation !== this.generation || !this.panel) {
       return;
     }
 
-    void this.panel.webview.postMessage({ type: 'graph', title: name, analysis: result, refit });
+    const { pipeline, analysis } = result;
+    this.panel.title = `Graph: ${pipeline.title}`;
+
+    // A file that does not parse right now is a file being typed. Its
+    // components are missing from this analysis, so drawing it would show
+    // every input that names them as broken. The last complete graph stays on
+    // screen, with the reason above it. Only when there is none yet is the
+    // partial one drawn, since something beats nothing.
+    const unreadable = analysis.unreadable
+      .map((entry) => `${analysis.files[entry.file]}: ${entry.message}`)
+      .join('; ');
+    if (unreadable && this.drawn) {
+      void this.panel.webview.postMessage({ type: 'unreadable', message: unreadable });
+      return;
+    }
+
+    this.files = pipeline.files;
+    this.drawn = !unreadable;
+    void this.panel.webview.postMessage({
+      type: 'graph',
+      title: pipeline.title,
+      analysis,
+      refit,
+      warning: unreadable || undefined,
+    });
   }
 
   dispose(): void {

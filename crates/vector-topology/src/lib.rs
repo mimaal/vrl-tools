@@ -22,7 +22,7 @@ pub use config::{
 };
 pub use graph::{build, Edge, Finding, Graph, Severity};
 pub use layout::{layout, Layout, Placement, Route, Slot};
-pub use render::{diagram, document};
+pub use render::{diagram, document, document_of_files};
 
 /// Which parser to read a config with.
 ///
@@ -62,6 +62,31 @@ pub struct Analysis {
     /// Where each component goes when drawn, by column and row. See
     /// [`layout`].
     pub layout: Layout,
+    /// The files read, in the order given. A component's or a finding's
+    /// `file` is an index into this.
+    pub files: Vec<String>,
+    /// Files that could not be read at all, and why. Their components are
+    /// missing from the graph, so a caller showing it live will usually want
+    /// to keep the last complete one on screen instead.
+    pub unreadable: Vec<Unreadable>,
+}
+
+/// One file of a pipeline, as given to [`analyse_files`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct ConfigFile {
+    /// Chooses the parser, and names the file in findings. A path relative to
+    /// the config directory reads best.
+    pub name: String,
+    pub source: String,
+}
+
+/// A file of a pipeline that did not parse.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Unreadable {
+    pub file: usize,
+    pub message: String,
+    pub range: Option<editor_text::Range>,
 }
 
 /// Reads `source` and returns everything that can be said about it.
@@ -87,7 +112,70 @@ pub fn analyse(source: &str, format: Format, title: &str) -> Result<Analysis, Co
         components: graph.components,
         edges: graph.edges,
         findings: graph.findings,
+        files: vec![title.to_owned()],
+        unreadable: Vec::new(),
     })
+}
+
+/// Reads a pipeline split across several files, the way Vector reads the
+/// files given to it with `--config` (or a glob such as
+/// `config/**/*.toml`): each one is a complete config with its own
+/// `sources`, `transforms` and `sinks`, and the components of all of them are
+/// one topology. An input in one file can name a source in another, and a name
+/// used in two files is an error.
+///
+/// A file that does not parse is listed in [`Analysis::unreadable`] and the
+/// rest are still read.
+#[must_use]
+pub fn analyse_files(files: &[ConfigFile], title: &str) -> Analysis {
+    let mut components = Vec::new();
+    let mut unreadable = Vec::new();
+
+    for (position, file) in files.iter().enumerate() {
+        let read = match Format::of(&file.name) {
+            Some(Format::Yaml) => read_yaml(&file.source),
+            Some(Format::Toml) => read_toml(&file.source),
+            None => Err(ConfigError {
+                message: format!("{} is neither a .yaml, a .yml nor a .toml file", file.name),
+                range: None,
+            }),
+        };
+        match read {
+            Ok(read) => components.extend(read.into_iter().map(|mut component| {
+                component.file = position;
+                component
+            })),
+            Err(error) => unreadable.push(Unreadable {
+                file: position,
+                message: error.message,
+                range: error.range,
+            }),
+        }
+    }
+
+    let names: Vec<String> = files.iter().map(|file| file.name.clone()).collect();
+    let graph = build(components);
+    let layout = layout(&graph);
+
+    Analysis {
+        document: document_of_files(&graph, title, &names),
+        layout,
+        components: graph.components,
+        edges: graph.edges,
+        findings: graph.findings,
+        files: names,
+        unreadable,
+    }
+}
+
+/// [`analyse_files`], taking and giving JSON: an array of `{name, source}`.
+#[must_use]
+pub fn analyse_files_json(files_json: &str, title: &str) -> String {
+    match serde_json::from_str::<Vec<ConfigFile>>(files_json) {
+        Ok(files) => serde_json::to_string(&analyse_files(&files, title))
+            .unwrap_or_else(|error| error_json(&error.to_string(), None)),
+        Err(error) => error_json(&format!("not a list of config files: {error}"), None),
+    }
 }
 
 /// [`analyse`], as JSON, for crossing a language boundary.
@@ -144,7 +232,89 @@ fn error_json(message: &str, range: Option<editor_text::Range>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{analyse_json, enrichment_tables, Format};
+    use super::{analyse_files, analyse_json, enrichment_tables, ConfigFile, Format};
+
+    fn file(name: &str, source: &str) -> ConfigFile {
+        ConfigFile {
+            name: name.to_owned(),
+            source: source.to_owned(),
+        }
+    }
+
+    /// The layout Vector reads with `-c 'config/**/*.toml'`: sources in one
+    /// file, the transforms reading them in another. Read one at a time, every
+    /// input in the second file names "nothing".
+    #[test]
+    fn a_pipeline_split_across_files_is_one_graph() {
+        let analysis = analyse_files(
+            &[
+                file("sources.toml", "[sources.app]\ntype = \"file\"\n"),
+                file(
+                    "nginx/parse.toml",
+                    "[transforms.parse]\ntype = \"remap\"\ninputs = [\"app\"]\n\n[sinks.out]\ntype = \"console\"\ninputs = [\"parse\"]\n",
+                ),
+            ],
+            "config",
+        );
+
+        assert!(analysis.findings.is_empty(), "{:?}", analysis.findings);
+        assert_eq!(analysis.edges.len(), 2);
+        let parse = analysis.components.iter().find(|c| c.id == "parse").expect("parse");
+        assert_eq!(analysis.files[parse.file], "nginx/parse.toml");
+        assert_eq!(analysis.edges[0].file, parse.file);
+    }
+
+    #[test]
+    fn a_name_used_in_two_files_is_an_error_in_both() {
+        let analysis = analyse_files(
+            &[
+                file("a.toml", "[sources.app]\ntype = \"file\"\n"),
+                file("b.yaml", "sinks:\n  app:\n    type: console\n    inputs: [app]\n"),
+            ],
+            "config",
+        );
+
+        let duplicate: Vec<usize> = analysis
+            .findings
+            .iter()
+            .filter(|f| f.message.contains("called `app`"))
+            .map(|f| f.file)
+            .collect();
+        assert_eq!(duplicate, [0, 1], "{:?}", analysis.findings);
+    }
+
+    /// A file mid-edit does not take the rest of the pipeline with it.
+    #[test]
+    fn a_broken_file_is_reported_and_the_rest_still_read() {
+        let analysis = analyse_files(
+            &[
+                file("ok.toml", "[sources.app]\ntype = \"file\"\n"),
+                file("broken.toml", "[sinks.out\n"),
+            ],
+            "config",
+        );
+
+        assert_eq!(analysis.components.len(), 1);
+        assert_eq!(analysis.unreadable.len(), 1);
+        assert_eq!(analysis.unreadable[0].file, 1);
+    }
+
+    #[test]
+    fn the_exported_problems_name_their_file() {
+        let analysis = analyse_files(
+            &[
+                file("sources.toml", "[sources.app]\ntype = \"file\"\n"),
+                file("sinks.toml", "[sinks.out]\ntype = \"console\"\ninputs = [\"nope\"]\n"),
+            ],
+            "config",
+        );
+
+        assert!(
+            analysis.document.contains("`sinks.toml`, line 3"),
+            "{}",
+            analysis.document,
+        );
+    }
 
     #[test]
     fn enrichment_tables_are_read_from_both_formats() {

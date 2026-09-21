@@ -34,6 +34,8 @@ pub struct Finding {
     /// Where to point: the input that does not resolve, or the component that
     /// nobody reads.
     pub range: Range,
+    /// The file `range` is in. See [`Component::file`].
+    pub file: usize,
 }
 
 /// One component feeding another.
@@ -46,6 +48,8 @@ pub struct Edge {
     pub to: String,
     /// The `inputs` entry that declared this edge.
     pub range: Range,
+    /// The file `range` is in: the consumer's.
+    pub file: usize,
 }
 
 /// A configuration, resolved.
@@ -69,6 +73,7 @@ pub fn build(components: Vec<Component>) -> Graph {
         }
     }
 
+    duplicates(&components, &mut findings);
     orphans(&components, &edges, &mut findings);
     cycles(&components, &edges, &mut findings);
 
@@ -104,6 +109,7 @@ fn resolve(
                     input.text, consumer.id,
                 ),
                 range: input.range,
+                file: consumer.file,
             });
             return;
         }
@@ -114,6 +120,7 @@ fn resolve(
                 output: None,
                 to: consumer.id.clone(),
                 range: input.range,
+                file: consumer.file,
             });
         }
         return;
@@ -135,6 +142,7 @@ fn resolve(
                     output: Some(output.to_owned()),
                     to: consumer.id.clone(),
                     range: input.range,
+                    file: consumer.file,
                 });
             }
             Some(producer) => findings.push(Finding {
@@ -151,13 +159,14 @@ fn resolve(
                     )
                 },
                 range: input.range,
+                file: consumer.file,
             }),
-            None => findings.push(dangling(&input.text, input.range)),
+            None => findings.push(dangling(&input.text, input.range, consumer.file)),
         }
         return;
     }
 
-    findings.push(dangling(&input.text, input.range));
+    findings.push(dangling(&input.text, input.range, consumer.file));
 }
 
 fn push_default_edge(
@@ -172,6 +181,7 @@ fn push_default_edge(
             severity: Severity::Error,
             message: format!("`{}` is a sink, so nothing can read from it", producer.id),
             range: input.range,
+            file: consumer.file,
         });
         return;
     }
@@ -181,6 +191,7 @@ fn push_default_edge(
             severity: Severity::Error,
             message: format!("`{}` reads from itself", consumer.id),
             range: input.range,
+            file: consumer.file,
         });
         return;
     }
@@ -190,14 +201,41 @@ fn push_default_edge(
         output: None,
         to: consumer.id.clone(),
         range: input.range,
+        file: consumer.file,
     });
 }
 
-fn dangling(text: &str, range: Range) -> Finding {
+fn dangling(text: &str, range: Range, file: usize) -> Finding {
     Finding {
         severity: Severity::Error,
         message: format!("no component is called `{text}`"),
         range,
+        file,
+    }
+}
+
+/// Two components with one name.
+///
+/// Vector refuses to start on it, whichever way round it happens: two
+/// sources with the same ID in two files, or a source and a sink sharing one
+/// ("More than one component with name ..."). Within one file the YAML or TOML
+/// parser usually catches it first; across files only this can. Every
+/// declaration is marked, because which one is the mistake is not for a
+/// reader of the config to decide.
+fn duplicates(components: &[Component], findings: &mut Vec<Finding>) {
+    for component in components {
+        let count = components.iter().filter(|other| other.id == component.id).count();
+        if count > 1 {
+            findings.push(Finding {
+                severity: Severity::Error,
+                message: format!(
+                    "{count} components are called `{}`, and Vector requires every name to be unique",
+                    component.id,
+                ),
+                range: component.range,
+                file: component.file,
+            });
+        }
     }
 }
 
@@ -223,6 +261,7 @@ fn orphans(components: &[Component], edges: &[Edge], findings: &mut Vec<Finding>
                 component.id,
             ),
             range: component.range,
+            file: component.file,
         });
     }
 }
@@ -242,15 +281,16 @@ fn cycles(components: &[Component], edges: &[Edge], findings: &mut Vec<Finding>)
     }
 
     for id in in_cycle {
-        let range = components
+        let (range, file) = components
             .iter()
             .find(|c| c.id == id)
-            .map_or_else(Range::default, |c| c.range);
+            .map_or_else(|| (Range::default(), 0), |c| (c.range, c.file));
 
         findings.push(Finding {
             severity: Severity::Error,
             message: format!("`{id}` is part of a loop, and a Vector topology cannot have one"),
             range,
+            file,
         });
     }
 }

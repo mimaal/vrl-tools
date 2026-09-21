@@ -41,6 +41,15 @@ Free and open source. Full phased plan lives in @docs/PLAN.md.
   not say which config runs it. The stub table accepts any index, because
   which fields a table can search depends on data only Vector's machine has.
 
+- The pipeline graph reads a pipeline, not a file: the files Vector is given
+  with `--config`, each a complete config, joined (`analyse_files` in
+  `crates/vector-topology`). Which files is `vrl-tools.vectorConfig`, the same
+  patterns Vector is started with; left empty, every YAML/TOML file in the
+  workspace folder with a top-level Vector section. Enrichment tables come
+  from the same files. Duplicate names across files are errors, as in
+  Vector's `check_shape`. The `--config-dir` subfolder layout (one component
+  per file, named by the file) is not read yet.
+
 - The pinned compiler defines the language the grammar paints. Two constructs
   that older VRL documentation still shows are gone and must not come back:
   path coalescence (`.foo.(a | b)`, removed in `vrl` 0.16.0) and bracketed

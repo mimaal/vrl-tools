@@ -110,8 +110,23 @@ export interface Topology {
   readonly components: readonly TopologyComponent[];
   readonly edges: readonly TopologyEdge[];
   readonly findings: readonly TopologyFinding[];
-  /** Where each component goes when drawn: column left to right, row top to bottom. */
-  readonly layout: readonly TopologyPlacement[];
+  /** The files read; a component's or a finding's `file` indexes this. */
+  readonly files: readonly string[];
+  /** Files that did not parse; their components are missing from the graph. */
+  readonly unreadable: readonly {
+    readonly file: number;
+    readonly message: string;
+    readonly range: VrlRange | null;
+  }[];
+  /** Where each component goes when drawn, and the lanes long arrows take. */
+  readonly layout: {
+    readonly components: readonly TopologyPlacement[];
+    readonly routes: readonly {
+      readonly from: number;
+      readonly to: number;
+      readonly via: readonly { readonly column: number; readonly row: number }[];
+    }[];
+  };
 }
 
 export interface TopologyPlacement {
@@ -130,6 +145,8 @@ export interface TopologyComponent {
   readonly range: VrlRange;
   /** The outputs it offers besides its default one: a route's routes, `dropped`. */
   readonly namedOutputs: readonly string[];
+  /** Which of `Topology.files` declares it. */
+  readonly file: number;
 }
 
 export interface TopologyEdge {
@@ -145,6 +162,8 @@ export interface TopologyFinding {
   readonly severity: 'error' | 'warning';
   readonly message: string;
   readonly range: VrlRange;
+  /** Which of `Topology.files` `range` is in. */
+  readonly file: number;
 }
 
 /** A config that did not parse at all. */
@@ -160,6 +179,7 @@ interface WasmModule {
   run(source: string, eventJson: string, enrichmentTables?: string[]): string;
   stdlib(): string;
   topology(source: string, fileName: string): string;
+  topology_files(filesJson: string, title: string): string;
   enrichment_tables(source: string, fileName: string): string[] | undefined;
   vrl_version(): string;
   vector_release(): string;
@@ -276,6 +296,17 @@ export class VrlChecker {
     return JSON.parse(this.call((wasm) => wasm.topology(source, fileName))) as
       | Topology
       | TopologyError;
+  }
+
+  /**
+   * The topology of a pipeline split across several files, each a complete
+   * config the way Vector reads the files given to `--config`. A file that
+   * does not parse is listed in `unreadable` and the rest are still read.
+   */
+  topologyFiles(files: readonly { name: string; source: string }[], title: string): Topology {
+    return JSON.parse(
+      this.call((wasm) => wasm.topology_files(JSON.stringify(files), title)),
+    ) as Topology;
   }
 
   /**

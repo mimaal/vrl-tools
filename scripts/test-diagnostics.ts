@@ -29,6 +29,7 @@ import {
   run,
   stdlib,
   topology,
+  topologyFiles,
   vrlVersion,
 } from './checker-harness.js';
 import { CORPUS, embeddedRegions, loadGrammar, ROOT } from './grammar-harness.js';
@@ -506,6 +507,33 @@ async function checkTopology(): Promise<void> {
     );
   } else {
     ok('the layout crosses the boundary: every component placed, arrows right, lanes for long ones');
+  }
+
+  // A pipeline split across files, the way `vector -c 'config/**/*.toml'`
+  // reads it: the transform's input names a source in another file.
+  const split = topologyFiles(
+    [
+      { name: 'config/vector.toml', source: ['[sources.app]', 'type = "file"', ''].join('\n') },
+      {
+        name: 'config/nginx/parse.toml',
+        source: [
+          '[transforms.parse]',
+          'type = "remap"',
+          'inputs = ["app"]',
+          '',
+          '[sinks.out]',
+          'type = "console"',
+          'inputs = ["parse"]',
+          '',
+        ].join('\n'),
+      },
+    ],
+    'config',
+  );
+  if (split.findings.length > 0 || split.edges.length !== 2 || split.unreadable.length > 0) {
+    fail('a pipeline split across files is one graph', JSON.stringify(split.findings));
+  } else {
+    ok('a pipeline split across files is one graph, with no false "no component" errors');
   }
 
   const dropped = named.edges.find((edge) => edge.output === 'dropped');

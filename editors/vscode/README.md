@@ -28,6 +28,18 @@ language used by [Vector](https://vector.dev).
   loop. The graph redraws as you edit, and exports as Markdown with a Mermaid
   diagram to commit next to the config.
 
+  A pipeline split across several files is drawn whole. By default every
+  YAML or TOML file in the workspace that declares `sources`, `transforms`,
+  `sinks` or `enrichment_tables` is part of it; to match exactly what your
+  Vector loads, set `vrl-tools.vectorConfig` to the patterns you start it with:
+
+  ```json
+  "vrl-tools.vectorConfig": ["config/**/*.toml"]
+  ```
+
+  Clicking a component opens the file it is declared in, and a name used in
+  two files is marked in both, as Vector would refuse it.
+
   ![The pipeline graph of a Vector config, with the path through one transform highlighted](https://raw.githubusercontent.com/mimaal/vrl-tools/main/editors/vscode/media/pipeline-graph.png)
 
 - **Hover, completion and signature help, generated from the compiler.** Hover
@@ -76,8 +88,10 @@ deployment, so it is worth having on screen.
 - An enrichment lookup is checked against the table's name, not its contents.
   Which fields a `geoip` or `file` table can be searched by depends on data
   that lives where Vector runs, so that part is left to Vector.
-- The graph reads one config file. A pipeline split across a directory, the
-  way `vector --config-dir` reads it, is drawn one file at a time.
+- The graph reads files that are complete configs, the way `vector --config`
+  reads them. The `--config-dir` layout where `sources/`, `transforms/` and
+  `sinks/` subfolders hold one component per file, named by the file, is not
+  read yet.
 - Completion does not add the `!` of a fallible call for you. Asserting turns
   a handled error into an aborted program, and that is your decision to make.
 

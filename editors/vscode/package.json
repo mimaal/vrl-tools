@@ -2,7 +2,7 @@
   "name": "vrl-tools",
   "displayName": "VRL Tools",
   "description": "Highlighting, snippets and Vector config support for VRL (Vector Remap Language).",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "license": "MIT",
   "publisher": "miguel-martinez",
   "repository": {
@@ -129,6 +129,15 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Type each program against the sample event next to it (`program.vrl.sample.json`), when there is one. The compiler then knows the fields your events actually carry, which turns \"this might fail\" into \"this field does not exist\". Turn it off to always check against an event of unknown shape."
+        },
+        "vrl-tools.vectorConfig": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "resource",
+          "markdownDescription": "The files your Vector reads its config from, as the patterns you pass to `vector --config`, relative to the workspace folder — for example `config/**/*.toml`. They are read as one pipeline: the graph draws all of them, and enrichment lookups are checked against the tables they declare. Left empty, every YAML or TOML file in the workspace that declares `sources`, `transforms`, `sinks` or `enrichment_tables` is used."
         }
       }
     }

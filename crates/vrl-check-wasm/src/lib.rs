@@ -110,6 +110,19 @@ pub fn topology(source: &str, file_name: &str) -> String {
     vector_topology::analyse_file_json(source, file_name)
 }
 
+/// The topology of a pipeline split across several files, as JSON.
+///
+/// `files_json` is an array of `{"name": …, "source": …}`, each file a
+/// complete config the way Vector reads the files given to `--config`. The
+/// shape is `vector_topology::Analysis`, whose `files` and `unreadable` say
+/// which file each component and finding is in, and which files did not
+/// parse. See `vector_topology::analyse_files`.
+#[wasm_bindgen]
+#[must_use]
+pub fn topology_files(files_json: &str, title: &str) -> String {
+    vector_topology::analyse_files_json(files_json, title)
+}
+
 /// The enrichment table names a Vector config declares, which is what
 /// [`check`] and [`run`] take.
 ///

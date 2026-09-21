@@ -4,6 +4,28 @@ Versions before 0.5.0 were never published; they exist as tags and as `.vsix`
 files built locally. They are listed here because the history explains what the
 extension is.
 
+## 0.6.2 — 2026-09-21
+
+- **A pipeline split across several files is drawn whole.** Vector started
+  with `--config 'config/**/*.toml'` reads every file as a complete config and
+  joins them, so a transform in one file reads a source in another. The graph
+  read only the open file, and marked every such input as naming nothing. It
+  now reads the pipeline the open file belongs to: the files
+  `vrl-tools.vectorConfig` names, the same patterns Vector is started with, or
+  when that is not set, every YAML or TOML file in the workspace that declares
+  a Vector section.
+- Clicking a component opens the file it is declared in, and each component
+  and problem says which file that is.
+- A name declared in two files is an error in both, as it is in Vector
+  ("More than one component with name ...").
+- Editing any file of the pipeline redraws the graph. A file that does not
+  parse while it is being typed leaves the last complete graph on screen.
+- Enrichment lookups are checked against the tables of the same files, so
+  setting `vrl-tools.vectorConfig` also decides which tables exist.
+- Paths shown in the graph are relative to the workspace folder. On Windows
+  they fell back to the bare file name, because the drive letter's case
+  differs between the APIs that hand out file URIs.
+
 ## 0.6.1 — 2026-09-21
 
 - **The pipeline graph works on a `vector.toml` without a TOML extension.**

@@ -70,6 +70,10 @@ pub struct Component {
     /// The outputs this component offers besides its default one. See
     /// [`crate::outputs`].
     pub named_outputs: Vec<String>,
+    /// Which of the files being read declares it, as an index into the list
+    /// the caller gave. `range` and every input's range are in that file.
+    /// Always 0 when a single file is read.
+    pub file: usize,
 }
 
 /// Why a config could not be read at all.
@@ -122,6 +126,7 @@ pub fn read_yaml(source: &str) -> Result<Vec<Component>, ConfigError> {
                 inputs: yaml_inputs(body, &index),
                 range: yaml_range(key, &index),
                 named_outputs: yaml_named_outputs(body),
+                file: 0,
             });
         }
     }
@@ -230,6 +235,7 @@ pub fn read_toml(source: &str) -> Result<Vec<Component>, ConfigError> {
                     .and_then(toml_edit::Key::span)
                     .map_or_else(Range::default, |span| index.range(span)),
                 named_outputs: toml_named_outputs(table),
+                file: 0,
             });
         }
     }

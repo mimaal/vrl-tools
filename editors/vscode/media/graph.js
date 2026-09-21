@@ -127,9 +127,23 @@
     return `${from}\u0000${to}`;
   }
 
-  /** @param {any} range */
-  function reveal(range) {
-    vscode.postMessage({ type: 'reveal', range });
+  /**
+   * The files the pipeline on screen was read from. A component's or a
+   * finding's `file` is an index into this.
+   * @type {string[]}
+   */
+  let files = [];
+
+  /** Where something is, for a reader: the file only when there are several. */
+  /** @param {number} file @param {any} range */
+  function where(file, range) {
+    const line = `line ${range.start.line + 1}`;
+    return files.length > 1 ? `${files[file] ?? '?'}, ${line}` : line;
+  }
+
+  /** @param {any} range @param {number} file */
+  function reveal(range, file) {
+    vscode.postMessage({ type: 'reveal', range, file });
   }
 
   // -------------------------------------------------------------- rendering
@@ -145,6 +159,7 @@
     const edges = /** @type {any[]} */ (analysis.edges);
     const findings = /** @type {any[]} */ (analysis.findings);
     const layout = /** @type {{components: any[], routes: any[]}} */ (analysis.layout);
+    files = analysis.files ?? [];
 
     renderSummary(components, edges);
     renderProblems(findings);
@@ -217,10 +232,12 @@
     /** @type {Map<string, any[]>} */
     const findingsOf = new Map();
     for (const finding of findings) {
+      // Ranges are per file, so two files can hold the same one.
       const owner = components.find(
         (c) =>
-          sameRange(c.range, finding.range) ||
-          c.inputs.some((/** @type {any} */ input) => sameRange(input.range, finding.range)),
+          c.file === finding.file &&
+          (sameRange(c.range, finding.range) ||
+            c.inputs.some((/** @type {any} */ input) => sameRange(input.range, finding.range))),
       );
       if (owner) {
         findingsOf.set(owner.id, [...(findingsOf.get(owner.id) ?? []), finding]);
@@ -431,6 +448,7 @@
       const tooltip = el('title', {}, group);
       tooltip.textContent = [
         `${id} (${component.type || 'no type'})`,
+        ...(files.length > 1 ? [where(component.file, component.range)] : []),
         ...own.map((f) => `${f.severity}: ${f.message.replaceAll('`', '')}`),
       ].join('\n');
 
@@ -444,7 +462,9 @@
       fitText(name, id, NODE_W - 36);
 
       const type = /** @type {SVGTextElement} */ (el('text', { class: 'type', x: 22, y: 53 }, group));
-      fitText(type, component.type || '(no type)', NODE_W - 36);
+      // With several files, the one declaring it, where the type has room.
+      const declared = files.length > 1 ? ` · ${(files[component.file] ?? '').split('/').pop()}` : '';
+      fitText(type, `${component.type || '(no type)'}${declared}`, NODE_W - 36);
 
       if (own.length > 0) {
         const badge = el('g', { class: `badge ${errors > 0 ? 'error' : 'warning'}` }, group);
@@ -457,11 +477,11 @@
         number.textContent = String(own.length);
       }
 
-      group.addEventListener('click', () => reveal(component.range));
+      group.addEventListener('click', () => reveal(component.range, component.file));
       group.addEventListener('keydown', (event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
-          reveal(component.range);
+          reveal(component.range, component.file);
         }
       });
       group.addEventListener('mouseenter', () => trace(id, edges, groups, drawn));
@@ -565,12 +585,12 @@
 
       const line = document.createElement('span');
       line.className = 'line';
-      line.textContent = `line ${finding.range.start.line + 1}`;
+      line.textContent = where(finding.file, finding.range);
       item.appendChild(line);
 
-      item.addEventListener('click', () => reveal(finding.range));
+      item.addEventListener('click', () => reveal(finding.range, finding.file));
       item.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') reveal(finding.range);
+        if (event.key === 'Enter') reveal(finding.range, finding.file);
       });
       problemList.appendChild(item);
     }
@@ -657,7 +677,14 @@
     const message = event.data;
     if (message.type === 'graph') {
       title.textContent = message.title;
-      banner.classList.remove('visible');
+      // Drawn with a file that does not parse, when there was no complete
+      // graph to keep: say which, and that it is missing from the picture.
+      if (message.warning) {
+        banner.textContent = `Not every file parses right now, so components are missing from this graph: ${message.warning}`;
+        banner.classList.add('visible');
+      } else {
+        banner.classList.remove('visible');
+      }
       render(message.analysis);
       // Edits keep the view where the person left it; a different config
       // starts framed.

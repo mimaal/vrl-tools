@@ -16,6 +16,13 @@ use crate::graph::{Graph, Severity};
 /// The whole document: the diagram, and what is wrong underneath it.
 #[must_use]
 pub fn document(graph: &Graph, title: &str) -> String {
+    document_of_files(graph, title, &[])
+}
+
+/// [`document`] for a pipeline read from several files, so that a problem
+/// says which file its line is in.
+#[must_use]
+pub fn document_of_files(graph: &Graph, title: &str, files: &[String]) -> String {
     let mut out = String::new();
 
     out.push_str(&format!("# {title}\n\n"));
@@ -24,7 +31,7 @@ pub fn document(graph: &Graph, title: &str) -> String {
     out.push_str(&diagram(graph));
 
     if !graph.findings.is_empty() {
-        out.push_str(&problems(graph));
+        out.push_str(&problems(graph, files));
     }
 
     out
@@ -108,7 +115,7 @@ pub fn diagram(graph: &Graph) -> String {
     out
 }
 
-fn problems(graph: &Graph) -> String {
+fn problems(graph: &Graph, files: &[String]) -> String {
     let mut out = String::from("\n## Problems\n\n");
 
     for finding in &graph.findings {
@@ -118,12 +125,13 @@ fn problems(graph: &Graph) -> String {
         };
 
         // One-based, because the document is read by a person next to an
-        // editor whose gutter counts from one.
-        out.push_str(&format!(
-            "- **{severity}**, line {}: {}\n",
-            finding.range.start.line + 1,
-            finding.message,
-        ));
+        // editor whose gutter counts from one. The file is named only when
+        // there is more than one to choose from.
+        let place = match files.get(finding.file) {
+            Some(file) if files.len() > 1 => format!("`{file}`, line {}", finding.range.start.line + 1),
+            _ => format!("line {}", finding.range.start.line + 1),
+        };
+        out.push_str(&format!("- **{severity}**, {place}: {}\n", finding.message));
     }
 
     out
