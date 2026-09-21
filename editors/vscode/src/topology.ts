@@ -37,8 +37,8 @@ const CONTEXT_KEY = 'vrl-tools.isVectorConfig';
 /** URI scheme of the exported Markdown documents. */
 const SCHEME = 'vrl-graph';
 
-/** The languages a Vector config is written in. */
-const CONFIG_LANGUAGES = ['yaml', 'toml'];
+/** The file extensions a Vector config has. */
+const CONFIG_FILE = /\.(ya?ml|toml)$/i;
 
 /** How long to wait after a keystroke before redrawing. */
 const DEBOUNCE_MS = 250;
@@ -101,20 +101,42 @@ export function registerTopology(
  * source, transform or sink in it, as the topology reader sees it.
  */
 export function isVectorConfig(checker: VrlChecker, document: vscode.TextDocument): boolean {
-  if (!CONFIG_LANGUAGES.includes(document.languageId)) {
+  const name = configName(document);
+  if (!name) {
     return false;
   }
   try {
-    const result = checker.topology(document.getText(), basename(document.uri));
+    const result = checker.topology(document.getText(), name);
     return !('error' in result) && result.components.length > 0;
   } catch {
     return false;
   }
 }
 
+/**
+ * The name a document is read as, which is what picks the YAML or the TOML
+ * parser: its file name when that ends in `.yaml`, `.yml` or `.toml`.
+ *
+ * The file name, not the language VS Code assigned. VS Code has YAML built in
+ * but not TOML, so without a TOML extension installed a `vector.toml` opens
+ * as plain text, and going by the language left it with no graph at all.
+ * The language is only the fallback, for an untitled document that has no
+ * file name to go by.
+ */
+function configName(document: vscode.TextDocument): string | undefined {
+  const name = basename(document.uri);
+  if (CONFIG_FILE.test(name)) {
+    return name;
+  }
+  if (document.languageId === 'yaml' || document.languageId === 'toml') {
+    return `${name}.${document.languageId}`;
+  }
+  return undefined;
+}
+
 function activeConfig(): vscode.TextDocument | undefined {
   const editor = vscode.window.activeTextEditor;
-  if (!editor || !CONFIG_LANGUAGES.includes(editor.document.languageId)) {
+  if (!editor || !configName(editor.document)) {
     void vscode.window.showWarningMessage(
       'Open a Vector configuration — a .yaml or .toml file — to graph it.',
     );
@@ -129,7 +151,7 @@ async function exportMarkdown(
   document: vscode.TextDocument,
 ): Promise<void> {
   const name = basename(document.uri);
-  const result = checker.topology(document.getText(), name);
+  const result = checker.topology(document.getText(), configName(document) ?? name);
   if ('error' in result) {
     void vscode.window.showErrorMessage(`${name} could not be read: ${result.error.message}`);
     return;
@@ -276,7 +298,7 @@ class GraphPanel implements vscode.Disposable {
 
     let result: Topology | { error: { message: string } };
     try {
-      result = this.checker.topology(document.getText(), name);
+      result = this.checker.topology(document.getText(), configName(document) ?? name);
     } catch (error) {
       this.output.appendLine(`Graphing ${document.uri.fsPath} failed: ${String(error)}`);
       return;

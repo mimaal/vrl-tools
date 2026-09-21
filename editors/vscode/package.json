@@ -2,7 +2,7 @@
   "name": "vrl-tools",
   "displayName": "VRL Tools",
   "description": "Highlighting, snippets and Vector config support for VRL (Vector Remap Language).",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "license": "MIT",
   "publisher": "miguel-martinez",
   "repository": {
@@ -36,7 +36,8 @@
   "activationEvents": [
     "onLanguage:vrl",
     "onLanguage:yaml",
-    "onLanguage:toml"
+    "onLanguage:toml",
+    "onLanguage:plaintext"
   ],
   "contributes": {
     "languages": [
@@ -91,13 +92,13 @@
         "title": "Show pipeline graph",
         "category": "VRL",
         "icon": "$(type-hierarchy-sub)",
-        "enablement": "editorLangId == yaml || editorLangId == toml"
+        "enablement": "resourceExtname == .yaml || resourceExtname == .yml || resourceExtname == .toml || editorLangId == yaml || editorLangId == toml"
       },
       {
         "command": "vrl-tools.exportPipelineGraph",
         "title": "Export pipeline graph as Markdown",
         "category": "VRL",
-        "enablement": "editorLangId == yaml || editorLangId == toml"
+        "enablement": "resourceExtname == .yaml || resourceExtname == .yml || resourceExtname == .toml || editorLangId == yaml || editorLangId == toml"
       }
     ],
     "menus": {

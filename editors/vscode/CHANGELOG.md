@@ -4,6 +4,15 @@ Versions before 0.5.0 were never published; they exist as tags and as `.vsix`
 files built locally. They are listed here because the history explains what the
 extension is.
 
+## 0.6.1 — 2026-09-21
+
+- **The pipeline graph works on a `vector.toml` without a TOML extension.**
+  VS Code has YAML built in but not TOML, so with no TOML extension installed
+  a `.toml` file opens as plain text, and 0.6.0 recognised a config by its
+  language: no graph button, and the command refused the file. A config is now
+  recognised by its file name, `.yaml`, `.yml` or `.toml`, and the extension
+  activates for a plain-text file so the button can appear.
+
 ## 0.6.0 — 2026-09-21
 
 - **A graph of the pipeline, from the Vector config.** A config open in the
