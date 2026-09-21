@@ -4,6 +4,26 @@ Versions before 0.5.0 were never published; they exist as tags and as `.vsix`
 files built locally. They are listed here because the history explains what the
 extension is.
 
+## Unreleased
+
+- **Vector's own VRL functions are no longer "undefined".** A `remap`
+  transform compiles against the standard library plus what Vector adds to it,
+  and the checker only knew the first half, so every
+  `find_enrichment_table_records` and `get_enrichment_table_record` was a false
+  error, and so were `get_secret`, `set_secret`, `remove_secret` and
+  `set_semantic_meaning`. They are now taken from Vector itself, at the tag the
+  `vrl` pin comes from, and appear in hover and completion like the rest.
+- **Enrichment lookups are checked against the config's tables**, as
+  `vector validate` checks them: the table a lookup names has to be declared
+  under `enrichment_tables` in one of the workspace's Vector configs. Adding a
+  table to a config, saved or not, re-checks every open program. What the
+  checker cannot see is the table's data, so whether a `geoip` table accepts
+  the fields a condition searches is still Vector's to say.
+- Left out on purpose: `get_vector_metric`, `find_vector_metrics`,
+  `aggregate_vector_metrics` and `parse_dnstap`. They need Vector's runtime and
+  the dnstap parser, which do not belong in the module the extension ships, so
+  they are still reported as undefined.
+
 ## 0.5.0 — 2026-09-18
 
 First release on the Marketplace, and the first to track a current Vector.

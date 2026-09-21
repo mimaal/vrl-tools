@@ -15,7 +15,10 @@ pub mod graph;
 pub mod outputs;
 pub mod render;
 
-pub use config::{read_toml, read_yaml, Component, ConfigError, Input, Role};
+pub use config::{
+    read_toml, read_toml_enrichment_tables, read_yaml, read_yaml_enrichment_tables, Component,
+    ConfigError, Input, Role,
+};
 pub use graph::{build, Edge, Finding, Graph, Severity};
 pub use render::{diagram, document};
 
@@ -108,6 +111,20 @@ pub fn analyse_file_json(source: &str, file_name: &str) -> String {
     }
 }
 
+/// The enrichment table names a config file declares, choosing the parser
+/// from the file name.
+///
+/// `None` when the name is not a config's, or the file does not parse: a
+/// config being edited is broken most of the time, and the caller is better
+/// off keeping what it last read than concluding the tables are gone.
+#[must_use]
+pub fn enrichment_tables(source: &str, file_name: &str) -> Option<Vec<String>> {
+    match Format::of(file_name)? {
+        Format::Yaml => read_yaml_enrichment_tables(source).ok(),
+        Format::Toml => read_toml_enrichment_tables(source).ok(),
+    }
+}
+
 fn error_json(message: &str, range: Option<editor_text::Range>) -> String {
     serde_json::json!({
         "error": {
@@ -120,7 +137,50 @@ fn error_json(message: &str, range: Option<editor_text::Range>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{analyse_json, Format};
+    use super::{analyse_json, enrichment_tables, Format};
+
+    #[test]
+    fn enrichment_tables_are_read_from_both_formats() {
+        let yaml = "enrichment_tables:
+  hosts:
+    type: file
+  geo:
+    type: geoip
+sources: {}
+";
+        let toml = "[enrichment_tables.hosts]
+type = \"file\"
+
+[enrichment_tables.geo]
+type = \"geoip\"
+";
+
+        for (source, name) in [(yaml, "vector.yaml"), (toml, "vector.toml")] {
+            let mut tables = enrichment_tables(source, name).expect("parses");
+            tables.sort();
+            assert_eq!(tables, ["geo", "hosts"], "{name}");
+        }
+    }
+
+    #[test]
+    fn a_config_without_enrichment_tables_declares_none() {
+        assert_eq!(
+            enrichment_tables("sources: {}
+", "vector.yaml"),
+            Some(Vec::new())
+        );
+        assert_eq!(enrichment_tables("", "vector.toml"), Some(Vec::new()));
+    }
+
+    /// A broken file is "unknown", not "no tables": the caller keeps what it
+    /// had rather than flagging every lookup while someone types.
+    #[test]
+    fn a_broken_config_says_nothing_about_its_tables() {
+        assert_eq!(enrichment_tables("enrichment_tables: [oops
+", "vector.yaml"), None);
+        assert_eq!(enrichment_tables("x = 1
+", "program.vrl"), None);
+    }
 
     #[test]
     fn a_format_comes_from_the_file_name() {

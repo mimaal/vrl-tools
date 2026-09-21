@@ -4,6 +4,17 @@
 # This file exists to exercise the VRL injection grammar, so it deliberately
 # mixes the shapes VRL appears in (remap `source:`, a vrl `condition:`) with a
 # `source` key that is not VRL at all.
+#
+# The enrichment table is here for the lookup in `parse`: Vector checks the
+# table a lookup names against the ones the config declares, at compile time.
+
+enrichment_tables:
+  services:
+    type: file
+    file:
+      path: /etc/vector/services.csv
+      encoding:
+        type: csv
 
 sources:
   app_logs:
@@ -25,6 +36,7 @@ transforms:
       ."@timestamp" = del(.timestamp)
       .log.level = downcase(string(.level) ?? "info")
       .http.response.status_code = to_int(.status) ?? null
+      .service = get_enrichment_table_record("services", {"host": .host.name}) ?? {}
 
   only_problems:
     type: filter

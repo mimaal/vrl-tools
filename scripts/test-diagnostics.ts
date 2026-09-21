@@ -22,7 +22,15 @@ import { readdir, readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { check, errorsIn, run, stdlib, topology, vrlVersion } from './checker-harness.js';
+import {
+  check,
+  enrichmentTables,
+  errorsIn,
+  run,
+  stdlib,
+  topology,
+  vrlVersion,
+} from './checker-harness.js';
 import { CORPUS, embeddedRegions, loadGrammar, ROOT } from './grammar-harness.js';
 
 let failed = 0;
@@ -37,8 +45,8 @@ function fail(what: string, detail: string): void {
 }
 
 /** Describes diagnostics compactly enough to read in a test failure. */
-function describe(source: string, lineOffset = 0): string {
-  return check(source)
+function describe(source: string, lineOffset = 0, tables: readonly string[] = []): string {
+  return check(source, undefined, tables)
     .diagnostics.map(
       (d) =>
         `line ${d.range.start.line + 1 + lineOffset}: ${d.severity} E${d.code} ${d.message}`,
@@ -228,22 +236,77 @@ async function checkEmbeddedPrograms(): Promise<void> {
     const config = await readFile(path.join(CORPUS, file), 'utf8');
     const regions = embeddedRegions(grammar, config);
 
+    // Compiled the way Vector compiles them: against the tables this config
+    // declares, read by the same module the extension reads them with.
+    const tables = enrichmentTables(config, file);
+    if (!tables?.includes('services')) {
+      fail(`${file} declares its enrichment table`, `read: ${JSON.stringify(tables)}`);
+      continue;
+    }
+
     if (regions.length === 0) {
       fail(`${file} has VRL to compile`, 'the injection grammar found no embedded region');
       continue;
     }
 
     for (const region of regions) {
-      const result = check(region.source);
+      const result = check(region.source, undefined, tables);
       if (result.diagnostics.length > 0) {
         fail(
           `${file}: the VRL block at line ${region.line} compiles clean`,
-          describe(region.source, region.line - 1),
+          describe(region.source, region.line - 1, tables),
         );
         continue;
       }
       ok(`${file}: the VRL block at line ${region.line} compiles clean`);
     }
+  }
+}
+
+/**
+ * The functions Vector adds to the standard library. Without them every
+ * enrichment lookup was "call to undefined function", in a tool whose point is
+ * to have no false positives.
+ */
+function checkVectorFunctions(): void {
+  const lookup = '.owner = get_enrichment_table_record!("hosts", {"host": .host})\n';
+
+  const declared = errorsIn(lookup, undefined, ['hosts']);
+  if (declared.length > 0) {
+    fail('a lookup in a declared table compiles', declared.map((d) => d.message).join('\n'));
+  } else {
+    ok('a lookup in a declared table compiles');
+  }
+
+  const undeclared = errorsIn(lookup)[0];
+  if (!undeclared) {
+    fail('a lookup in an undeclared table is an error', 'the compiler accepted it');
+  } else if (!undeclared.notes.some((note) => note.includes('enrichment_tables'))) {
+    fail(
+      'with no tables declared, the error says where they come from',
+      JSON.stringify(undeclared.notes),
+    );
+  } else {
+    ok('a lookup in an undeclared table is an error that says where tables come from');
+  }
+
+  const secrets = errorsIn('.key = get_secret("api_key")\n');
+  if (secrets.length > 0) {
+    fail('get_secret is defined', secrets.map((d) => d.message).join('\n'));
+  } else {
+    ok('get_secret is defined');
+  }
+
+  const names = new Set(stdlib().functions.map((f) => f.name));
+  const missing = [
+    'find_enrichment_table_records',
+    'get_enrichment_table_record',
+    'get_secret',
+  ].filter((name) => !names.has(name));
+  if (missing.length > 0) {
+    fail('hover and completion know the functions Vector adds', `missing: ${missing.join(', ')}`);
+  } else {
+    ok('hover and completion know the functions Vector adds');
   }
 }
 
@@ -510,6 +573,7 @@ async function main(): Promise<void> {
   await checkSampleTypedPrograms();
   checkSamplePolicy();
   await checkEmbeddedPrograms();
+  checkVectorFunctions();
   checkBoundary();
   checkStdlib();
   await checkTopology();

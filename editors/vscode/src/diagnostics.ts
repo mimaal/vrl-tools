@@ -4,6 +4,7 @@ import type { Check, VrlDiagnostic, VrlRange } from './checker';
 import { VrlChecker } from './checker';
 import { isSample, programFor, SampleStore } from './sample';
 import type { StatusBar } from './status';
+import type { EnrichmentTables } from './tables';
 
 /** How long to wait after a keystroke before recompiling. */
 const DEBOUNCE_MS = 300;
@@ -32,6 +33,7 @@ export class DiagnosticRunner implements vscode.Disposable {
   constructor(
     private readonly checker: VrlChecker,
     private readonly samples: SampleStore,
+    private readonly tables: EnrichmentTables,
     private readonly status: StatusBar,
     private readonly output: vscode.OutputChannel,
   ) {
@@ -61,7 +63,8 @@ export class DiagnosticRunner implements vscode.Disposable {
     }
   }
 
-  private recheckAll(): void {
+  /** Re-checks every open program, when what they are checked against moved. */
+  recheckAll(): void {
     for (const document of vscode.workspace.textDocuments) {
       this.schedule(document, 0);
     }
@@ -102,7 +105,7 @@ export class DiagnosticRunner implements vscode.Disposable {
 
     let result: Check;
     try {
-      result = this.checker.check(document.getText(), sample?.json);
+      result = this.checker.check(document.getText(), sample?.json, this.tables.names());
     } catch (error) {
       // A panic inside the wasm module would otherwise leave stale squiggles on
       // screen with no explanation.

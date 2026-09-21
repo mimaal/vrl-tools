@@ -147,10 +147,11 @@ export interface TopologyError {
 }
 
 interface WasmModule {
-  check(source: string, sampleEventJson?: string): string;
-  run(source: string, eventJson: string): string;
+  check(source: string, sampleEventJson?: string, enrichmentTables?: string[]): string;
+  run(source: string, eventJson: string, enrichmentTables?: string[]): string;
   stdlib(): string;
   topology(source: string, fileName: string): string;
+  enrichment_tables(source: string, fileName: string): string[] | undefined;
   vrl_version(): string;
   vector_release(): string;
 }
@@ -210,7 +211,7 @@ export class VrlChecker {
    * decides, which for the diagnostics runner means leaving the file
    * unchecked rather than looping.
    */
-  private call(into: (wasm: WasmModule) => string): string {
+  private call<T>(into: (wasm: WasmModule) => T): T {
     try {
       return into(this.wasm);
     } catch {
@@ -220,8 +221,15 @@ export class VrlChecker {
     }
   }
 
-  check(source: string, sampleEventJson?: string): Check {
-    return JSON.parse(this.call((wasm) => wasm.check(source, sampleEventJson))) as Check;
+  /**
+   * Compiles `source`. `enrichmentTables` are the table names the Vector
+   * config declares, which enrichment lookups are checked against; none
+   * declared means every lookup is rejected, as `vector validate` would.
+   */
+  check(source: string, sampleEventJson?: string, enrichmentTables: readonly string[] = []): Check {
+    return JSON.parse(
+      this.call((wasm) => wasm.check(source, sampleEventJson, [...enrichmentTables])),
+    ) as Check;
   }
 
   /**
@@ -230,8 +238,19 @@ export class VrlChecker {
    * This executes the user's program. It runs in the same wasm sandbox as the
    * checker, with no filesystem and no network to reach.
    */
-  run(source: string, eventJson: string): Run {
-    return JSON.parse(this.call((wasm) => wasm.run(source, eventJson))) as Run;
+  run(source: string, eventJson: string, enrichmentTables: readonly string[] = []): Run {
+    return JSON.parse(
+      this.call((wasm) => wasm.run(source, eventJson, [...enrichmentTables])),
+    ) as Run;
+  }
+
+  /**
+   * The enrichment table names a Vector config declares, read with the same
+   * parsers as the graph. `undefined` when the file does not parse, which for
+   * a config being edited is most of the time.
+   */
+  enrichmentTables(source: string, fileName: string): string[] | undefined {
+    return this.call((wasm) => wasm.enrichment_tables(source, fileName));
   }
 
   /**

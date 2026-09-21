@@ -25,20 +25,29 @@ pub fn start() {
 /// diagnostics whose ranges are already in the editor's coordinates (zero-based
 /// lines, UTF-16 columns).
 ///
-/// `sample_event_json` is accepted and ignored for now — see
-/// `vrl_check_core::check`.
+/// `sample_event_json` types the program; `enrichment_tables` are the table
+/// names the Vector config declares, which enrichment lookups are checked
+/// against. Leaving it out means none are declared. See
+/// `vrl_check_core::check` for both.
 #[wasm_bindgen]
 #[must_use]
-pub fn check(source: &str, sample_event_json: Option<String>) -> String {
-    vrl_check_core::check_json(source, sample_event_json.as_deref()).unwrap_or_else(|error| {
-        // Serialising our own types cannot realistically fail, but returning a
-        // parseable answer beats trapping inside the wasm module.
-        format!(
+pub fn check(
+    source: &str,
+    sample_event_json: Option<String>,
+    enrichment_tables: Option<Vec<String>>,
+) -> String {
+    let tables = enrichment_tables.unwrap_or_default();
+    vrl_check_core::check_json(source, sample_event_json.as_deref(), &tables).unwrap_or_else(
+        |error| {
+            // Serialising our own types cannot realistically fail, but returning a
+            // parseable answer beats trapping inside the wasm module.
+            format!(
             "{{\"compiled\":false,\"vrlVersion\":\"{}\",\"diagnostics\":[],\"internalError\":{}}}",
             vrl_check_core::VRL_VERSION,
             serde_json_string(&error.to_string()),
         )
-    })
+        },
+    )
 }
 
 /// Compiles `source` against `event_json` and runs it, returning JSON.
@@ -50,10 +59,13 @@ pub fn check(source: &str, sample_event_json: Option<String>) -> String {
 /// This executes the user's own program inside the same sandbox as everything
 /// else here. It has no filesystem and no network to reach: the functions that
 /// would want them are compiled in but abort when called.
+///
+/// `enrichment_tables` is what [`check`] takes.
 #[wasm_bindgen]
 #[must_use]
-pub fn run(source: &str, event_json: &str) -> String {
-    vrl_check_core::run_json(source, event_json).unwrap_or_else(|error| {
+pub fn run(source: &str, event_json: &str, enrichment_tables: Option<Vec<String>>) -> String {
+    let tables = enrichment_tables.unwrap_or_default();
+    vrl_check_core::run_json(source, event_json, &tables).unwrap_or_else(|error| {
         format!(
             "{{\"compiled\":false,\"vrlVersion\":\"{}\",\"diagnostics\":[],\"internalError\":{}}}",
             vrl_check_core::VRL_VERSION,
@@ -98,6 +110,17 @@ pub fn topology(source: &str, file_name: &str) -> String {
     vector_topology::analyse_file_json(source, file_name)
 }
 
+/// The enrichment table names a Vector config declares, which is what
+/// [`check`] and [`run`] take.
+///
+/// `undefined` when the file is not a config or does not parse, so the caller
+/// can keep what it last read. See `vector_topology::enrichment_tables`.
+#[wasm_bindgen]
+#[must_use]
+pub fn enrichment_tables(source: &str, file_name: &str) -> Option<Vec<String>> {
+    vector_topology::enrichment_tables(source, file_name)
+}
+
 /// The pinned `vrl` crate version this module was built against.
 #[wasm_bindgen]
 #[must_use]
@@ -138,7 +161,7 @@ mod tests {
 
     #[test]
     fn check_returns_the_cores_json() {
-        let json = check(".x = 1\n", None);
+        let json = check(".x = 1\n", None, None);
 
         assert!(json.contains("\"compiled\":true"), "{json}");
         assert!(json.contains("\"vrlVersion\""), "{json}");
@@ -146,7 +169,7 @@ mod tests {
 
     #[test]
     fn a_rejected_program_still_answers() {
-        let json = check(".parsed = parse_json(.message)\n", None);
+        let json = check(".parsed = parse_json(.message)\n", None, None);
 
         assert!(json.contains("\"compiled\":false"), "{json}");
         assert!(json.contains("\"severity\":\"error\""), "{json}");
@@ -154,7 +177,7 @@ mod tests {
 
     #[test]
     fn running_a_program_crosses_the_boundary() {
-        let json = run(".status = to_int!(.status)\n", "{\"status\":\"200\"}");
+        let json = run(".status = to_int!(.status)\n", "{\"status\":\"200\"}", None);
 
         assert!(json.contains("\"compiled\":true"), "{json}");
         assert!(json.contains("\"status\":200"), "{json}");
@@ -162,7 +185,7 @@ mod tests {
 
     #[test]
     fn a_run_against_a_broken_sample_still_answers() {
-        let json = run(".x = 1\n", "not json");
+        let json = run(".x = 1\n", "not json", None);
 
         assert!(json.contains("\"sampleError\""), "{json}");
     }

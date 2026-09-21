@@ -6,6 +6,7 @@ import { registerLanguageFeatures } from './language';
 import { registerRun } from './run';
 import { SampleStore } from './sample';
 import { StatusBar } from './status';
+import { EnrichmentTables } from './tables';
 import { registerTopology } from './topology';
 
 /**
@@ -43,11 +44,16 @@ export function activate(context: vscode.ExtensionContext): void {
   const samples = new SampleStore((program) => runner?.recheck(program));
   context.subscriptions.push(samples);
 
-  runner = new DiagnosticRunner(checker, samples, status, output);
+  // Same arrangement: a config declaring a table changes the answer for every
+  // program that looks one up.
+  const tables = new EnrichmentTables(checker, output, () => runner?.recheckAll());
+  context.subscriptions.push(tables);
+
+  runner = new DiagnosticRunner(checker, samples, tables, status, output);
   context.subscriptions.push(runner);
 
   context.subscriptions.push(...registerLanguageFeatures(checker, output));
-  context.subscriptions.push(...registerRun(checker, samples, output));
+  context.subscriptions.push(...registerRun(checker, samples, tables, output));
 
   // Vector configs, not .vrl files: the graph command is the one thing here
   // that works on a YAML or TOML document, which is why it activates by being

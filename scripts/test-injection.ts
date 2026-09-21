@@ -206,6 +206,13 @@ const CORPUS_CASES: CorpusCase[] = [
     expect: 'support.function.vrl',
   },
   {
+    what: 'corpus vector.yaml: a function Vector adds is painted like the stdlib',
+    file: 'vector.yaml',
+    scope: 'vrl.injection.yaml',
+    token: 'get_enrichment_table_record',
+    expect: 'support.function.vrl',
+  },
+  {
     what: 'corpus vector.yaml: the vrl condition block is VRL',
     file: 'vector.yaml',
     scope: 'vrl.injection.yaml',

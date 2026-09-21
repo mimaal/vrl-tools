@@ -31,6 +31,10 @@ vrl = { version = "=0.35.0", default-features = false, features = [
     "enable_crypto_functions",
     "enable_network_functions",
 ] }
+# The functions Vector adds on top of the standard library, taken from Vector
+# itself at the release the vrl pin comes from. The tag moves with the pin.
+vector-vrl-functions = { git = "https://github.com/vectordotdev/vector", tag = "v0.58.0", default-features = false }
+enrichment = { git = "https://github.com/vectordotdev/vector", tag = "v0.58.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

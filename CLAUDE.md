@@ -27,6 +27,20 @@ Free and open source. Full phased plan lives in @docs/PLAN.md.
   0.33.1, 0.55.0 -> 0.32.0, 0.54.0 -> 0.31.0, 0.53.0 -> 0.30.0, 0.52.0 ->
   0.29.0.
 
+- Programs compile against `vector_vrl_functions::all()`, not
+  `vrl::stdlib::all()`: the standard library plus the functions Vector adds
+  (enrichment lookups, secrets, `set_semantic_meaning`), taken as git
+  dependencies on Vector at tag `v<VECTOR_RELEASE>`. The tag moves with the
+  pin, and `version_matches_the_pin` checks it. Metrics functions and
+  `parse_dnstap` are left out on purpose (they need `vector-core` / the dnstap
+  parser). Vector's workspace turns on `vrl`'s `cli`, `test`,
+  `test_framework` and `arbitrary` features, which unify into ours: the
+  linker drops that code (the wasm grew 63 KB) but the notices list the crates.
+  Enrichment table names come from the `enrichment_tables` of every Vector
+  config in the workspace (`editors/vscode/src/tables.ts`); a `.vrl` file does
+  not say which config runs it. The stub table accepts any index, because
+  which fields a table can search depends on data only Vector's machine has.
+
 - The pinned compiler defines the language the grammar paints. Two constructs
   that older VRL documentation still shows are gone and must not come back:
   path coalescence (`.foo.(a | b)`, removed in `vrl` 0.16.0) and bracketed

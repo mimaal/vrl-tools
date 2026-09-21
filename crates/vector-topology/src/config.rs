@@ -290,3 +290,51 @@ fn toml_flag(table: &dyn toml_edit::TableLike, key: &str, default: bool) -> bool
         .and_then(toml_edit::Item::as_bool)
         .unwrap_or(default)
 }
+
+/// The names a YAML config declares under `enrichment_tables`.
+///
+/// Only the names: they are what the VRL compiler checks an enrichment lookup
+/// against. What each table holds lives in a file on the machine Vector runs
+/// on, not in the config.
+///
+/// # Errors
+/// When the document is not YAML.
+pub fn read_yaml_enrichment_tables(source: &str) -> Result<Vec<String>, ConfigError> {
+    let documents = MarkedYaml::load_from_str(source).map_err(|error| ConfigError {
+        message: error.to_string(),
+        range: None,
+    })?;
+
+    Ok(documents
+        .first()
+        .and_then(|root| root.data.as_mapping_get(ENRICHMENT_TABLES))
+        .and_then(|section| section.data.as_mapping())
+        .map(|entries| {
+            entries
+                .keys()
+                .filter_map(|key| key.data.as_str().map(ToOwned::to_owned))
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+/// [`read_yaml_enrichment_tables`], for a TOML config.
+///
+/// # Errors
+/// When the document is not TOML.
+pub fn read_toml_enrichment_tables(source: &str) -> Result<Vec<String>, ConfigError> {
+    let index = LineIndex::new(source);
+    let document = toml_edit::Document::parse(source).map_err(|error| ConfigError {
+        message: error.message().to_owned(),
+        range: error.span().map(|span| index.range(span)),
+    })?;
+
+    Ok(document
+        .get(ENRICHMENT_TABLES)
+        .and_then(toml_edit::Item::as_table_like)
+        .map(|tables| tables.iter().map(|(name, _)| name.to_owned()).collect())
+        .unwrap_or_default())
+}
+
+/// The top-level key Vector reads enrichment tables from.
+const ENRICHMENT_TABLES: &str = "enrichment_tables";

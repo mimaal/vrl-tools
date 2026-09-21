@@ -7,19 +7,20 @@
 //!
 //! The rule that makes the whole thing worth building: no heuristics. Every
 //! diagnostic here comes from `vrl::compiler::compile`, which is the same code
-//! path `vector validate` takes. If this crate accepts a program, Vector
-//! accepts it — for the pinned version of the language, which is
+//! path `vector validate` takes, with the same functions: the standard library
+//! plus what Vector adds to it (see `vector`). If this crate accepts a program,
+//! Vector accepts it — for the pinned version of the language, which is
 //! [`VRL_VERSION`].
 
-mod stdlib;
 mod run;
 pub(crate) mod sample;
-
+mod stdlib;
+mod vector;
 
 use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
-use vrl::compiler::{CompileConfig, Function};
+use vrl::compiler::Function;
 use vrl::diagnostic::{Diagnostic as VrlDiagnostic, DiagnosticList, Severity as VrlSeverity};
 
 pub use run::{run, run_json, Run};
@@ -147,13 +148,14 @@ impl From<VrlSeverity> for Severity {
     }
 }
 
-/// The standard library, built once.
+/// Every function a `remap` transform can call, built once: the standard
+/// library and the functions Vector adds to it. See `vector`.
 ///
-/// `vrl::stdlib::all()` boxes almost two hundred function objects on every
+/// `vector_vrl_functions::all()` boxes two hundred function objects on every
 /// call, and this runs on every keystroke.
 pub(crate) fn functions() -> &'static [Box<dyn Function>] {
     static FUNCTIONS: OnceLock<Vec<Box<dyn Function>>> = OnceLock::new();
-    FUNCTIONS.get_or_init(vrl::stdlib::all)
+    FUNCTIONS.get_or_init(vector_vrl_functions::all)
 }
 
 /// Compiles `source` and reports the result.
@@ -164,12 +166,16 @@ pub(crate) fn functions() -> &'static [Box<dyn Function>] {
 /// shape, which is the safe assumption and the noisy one — every field access
 /// is "might be anything".
 ///
+/// `enrichment_tables` are the names the Vector config declares under
+/// `enrichment_tables`. An enrichment lookup naming any other table is an
+/// error, as it is in `vector validate`; with none declared, every lookup is.
+///
 /// A sample that cannot be read does not stop the check. It is reported in
 /// `sample_error` and the program is compiled against an unknown event, since
 /// having the wrong diagnostics is worse than having the pessimistic ones, but
 /// having none at all is worse still.
 #[must_use]
-pub fn check(source: &str, sample_event: Option<&str>) -> Check {
+pub fn check(source: &str, sample_event: Option<&str>, enrichment_tables: &[String]) -> Check {
     let index = LineIndex::new(source);
 
     let (external, sample_error) = match sample_event.map(sample::event_from_json) {
@@ -184,14 +190,16 @@ pub fn check(source: &str, sample_event: Option<&str>) -> Check {
         source,
         functions(),
         &external,
-        CompileConfig::default(),
+        vector::compile_config(enrichment_tables),
     ) {
         Ok(result) => (true, convert(&result.warnings, &index)),
         Err(diagnostics) => (false, convert(&diagnostics, &index)),
     };
 
+    vector::explain_missing_tables(&mut diagnostics, enrichment_tables);
+
     if typed_with_sample {
-        relax_over_defensive(&mut diagnostics, source, &index);
+        relax_over_defensive(&mut diagnostics, source, enrichment_tables, &index);
 
         // If every reason to reject the program was "your error handling is
         // redundant for this event", the program compiles for the events it
@@ -222,7 +230,12 @@ pub(crate) fn is_error(diagnostic: &Diagnostic) -> bool {
 /// is unconditional — `1 ?? 2` is redundant whatever the event looks like —
 /// and stays an error. One that does not is an artefact of typing against a
 /// single example, and becomes a warning with a note saying so.
-fn relax_over_defensive(diagnostics: &mut [Diagnostic], source: &str, index: &LineIndex<'_>) {
+fn relax_over_defensive(
+    diagnostics: &mut [Diagnostic],
+    source: &str,
+    enrichment_tables: &[String],
+    index: &LineIndex<'_>,
+) {
     if !diagnostics
         .iter()
         .any(|d| OVER_DEFENSIVE.contains(&d.code) && d.severity == Severity::Error)
@@ -234,7 +247,7 @@ fn relax_over_defensive(diagnostics: &mut [Diagnostic], source: &str, index: &Li
         source,
         functions(),
         &sample::unknown_env(),
-        CompileConfig::default(),
+        vector::compile_config(enrichment_tables),
     ) {
         Ok(result) => convert(&result.warnings, index),
         Err(diagnostics) => convert(&diagnostics, index),
@@ -268,8 +281,12 @@ fn relax_over_defensive(diagnostics: &mut [Diagnostic], source: &str, index: &Li
 /// # Errors
 ///
 /// Only if the answer fails to serialise, which would be a bug in this crate.
-pub fn check_json(source: &str, sample_event: Option<&str>) -> serde_json::Result<String> {
-    serde_json::to_string(&check(source, sample_event))
+pub fn check_json(
+    source: &str,
+    sample_event: Option<&str>,
+    enrichment_tables: &[String],
+) -> serde_json::Result<String> {
+    serde_json::to_string(&check(source, sample_event, enrichment_tables))
 }
 
 pub(crate) fn convert(diagnostics: &DiagnosticList, index: &LineIndex<'_>) -> Vec<Diagnostic> {
@@ -322,7 +339,7 @@ mod tests {
     use super::*;
 
     fn errors(source: &str) -> Vec<Diagnostic> {
-        check(source, None)
+        check(source, None, &[])
             .diagnostics
             .into_iter()
             .filter(|d| matches!(d.severity, Severity::Error | Severity::Bug))
@@ -331,7 +348,7 @@ mod tests {
 
     #[test]
     fn a_valid_program_compiles() {
-        let result = check(".status = to_int(.status) ?? 0\n", None);
+        let result = check(".status = to_int(.status) ?? 0\n", None, &[]);
 
         assert!(result.compiled, "diagnostics: {:?}", result.diagnostics);
         assert!(
@@ -346,7 +363,7 @@ mod tests {
 
     #[test]
     fn an_unhandled_fallible_assignment_is_an_error() {
-        let result = check(".parsed = parse_json(.message)\n", None);
+        let result = check(".parsed = parse_json(.message)\n", None, &[]);
 
         assert!(!result.compiled);
         let error = result
@@ -391,7 +408,7 @@ mod tests {
             "with an unknown event, .message might not be a string and .count might not be a number",
         );
 
-        let with_sample = check(source, Some(r#"{"message":"HELLO","count":1}"#));
+        let with_sample = check(source, Some(r#"{"message":"HELLO","count":1}"#), &[]);
         assert!(
             with_sample.compiled,
             "the sample settles both types: {:?}",
@@ -409,6 +426,7 @@ mod tests {
         let result = check(
             ".parsed = parse_json(.message)\n",
             Some(r#"{"message":"{\"a\":1}"}"#),
+            &[],
         );
 
         assert!(!result.compiled);
@@ -420,7 +438,7 @@ mod tests {
     #[test]
     fn a_sample_event_makes_a_misspelled_field_visible() {
         let sample = Some(r#"{"message":"hello"}"#);
-        let result = check(".n = .mesage + 1\n", sample);
+        let result = check(".n = .mesage + 1\n", sample, &[]);
 
         assert!(!result.compiled, "adding 1 to a field that does not exist");
         assert!(result.typed_with_sample);
@@ -433,7 +451,7 @@ mod tests {
     #[test]
     fn a_defensive_program_is_not_broken_by_a_sample() {
         let source = ".host = string(.hostname) ?? \"unknown\"\n";
-        let result = check(source, Some(r#"{"hostname":"web-01"}"#));
+        let result = check(source, Some(r#"{"hostname":"web-01"}"#), &[]);
 
         assert!(result.compiled, "{:?}", result.diagnostics);
         let relaxed: Vec<&Diagnostic> = result
@@ -446,7 +464,10 @@ mod tests {
         assert_eq!(relaxed[0].code, 651);
         assert_eq!(relaxed[0].severity, Severity::Warning);
         assert!(
-            relaxed[0].notes.iter().any(|note| note.contains("sample event")),
+            relaxed[0]
+                .notes
+                .iter()
+                .any(|note| note.contains("sample event")),
             "the note has to say why this is not an error",
         );
     }
@@ -456,7 +477,7 @@ mod tests {
     /// sample had nothing to do with it.
     #[test]
     fn error_handling_that_is_always_redundant_stays_an_error() {
-        let result = check(".x = 1 ?? 2\n", Some(r#"{"message":"hello"}"#));
+        let result = check(".x = 1 ?? 2\n", Some(r#"{"message":"hello"}"#), &[]);
 
         assert!(!result.compiled);
         let error = result
@@ -471,14 +492,14 @@ mod tests {
 
     #[test]
     fn nothing_is_relaxed_without_a_sample() {
-        let result = check(".x = 1 ?? 2\n", None);
+        let result = check(".x = 1 ?? 2\n", None, &[]);
 
         assert!(result.diagnostics.iter().all(|d| !d.relaxed_by_sample));
     }
 
     #[test]
     fn a_broken_sample_is_reported_without_giving_up_on_the_program() {
-        let result = check(".x = 1\n", Some("{not json"));
+        let result = check(".x = 1\n", Some("{not json"), &[]);
 
         assert!(result.compiled, "the program is still checked");
         assert!(!result.typed_with_sample);
@@ -530,9 +551,12 @@ mod tests {
 
     #[test]
     fn the_answer_serialises_as_camel_case_json() {
-        let json = check_json(".x = 1\n", None).expect("serialises");
+        let json = check_json(".x = 1\n", None, &[]).expect("serialises");
 
-        assert!(json.contains(&format!("\"vrlVersion\":\"{VRL_VERSION}\"")), "{json}");
+        assert!(
+            json.contains(&format!("\"vrlVersion\":\"{VRL_VERSION}\"")),
+            "{json}"
+        );
         assert!(json.contains("\"compiled\":true"), "{json}");
     }
 
@@ -554,6 +578,19 @@ mod tests {
             cargo.contains(&format!("vrl = {{ version = \"={VRL_VERSION}\"")),
             "Cargo.toml does not pin vrl {VRL_VERSION}",
         );
+
+        // The functions Vector adds come from Vector itself, at a tag. A tag
+        // that lags the pin would check programs against one release's stdlib
+        // and another release's enrichment functions.
+        let vector_tag = format!("tag = \"v{VECTOR_RELEASE}\"");
+        for dependency in ["vector-vrl-functions", "enrichment"] {
+            assert!(
+                cargo
+                    .lines()
+                    .any(|line| line.starts_with(dependency) && line.contains(&vector_tag)),
+                "Cargo.toml does not take {dependency} from Vector {VECTOR_RELEASE}",
+            );
+        }
 
         let package = std::fs::read_to_string(root.join("package.json")).expect("package.json");
         assert!(

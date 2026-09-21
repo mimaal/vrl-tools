@@ -1,6 +1,11 @@
 # Synthetic Vector configuration in TOML. Same rules as vector.yaml: public
 # config format only, no third-party parsers, no sample logs.
 
+[enrichment_tables.services]
+type = "file"
+file.path = "/etc/vector/services.csv"
+file.encoding.type = "csv"
+
 [sources.app_logs]
 type = "file"
 include = ["/var/log/app/*.log"]
@@ -18,6 +23,7 @@ if err != null {
 ."@timestamp" = del(.timestamp)
 .log.level = downcase(string(.level) ?? "info")
 .matched = match(to_string(.message) ?? "", r'^\d+ bytes$')
+.service = get_enrichment_table_record("services", {"host": .host.name}) ?? {}
 '''
 
 [transforms.only_problems]

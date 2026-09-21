@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 
 import type { Run, VrlChecker } from './checker';
 import type { SampleStore } from './sample';
+import type { EnrichmentTables } from './tables';
 
 /**
  * `VRL: Run on sample event` — the command that turns the extension from a
@@ -24,6 +25,7 @@ const SCHEME = 'vrl-run';
 export function registerRun(
   checker: VrlChecker,
   samples: SampleStore,
+  tables: EnrichmentTables,
   output: vscode.OutputChannel,
 ): vscode.Disposable[] {
   const results = new ResultDocuments();
@@ -52,7 +54,7 @@ export function registerRun(
         return;
       }
 
-      const result = checker.run(document.getText(), sample.json);
+      const result = checker.run(document.getText(), sample.json, tables.names());
       output.appendLine(
         `Ran ${basename(document.uri)} against ${basename(sample.uri)}: ` +
           `${result.compiled ? 'compiled' : 'did not compile'}` +

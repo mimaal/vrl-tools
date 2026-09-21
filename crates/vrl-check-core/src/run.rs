@@ -11,11 +11,11 @@
 use serde::{Deserialize, Serialize};
 use vrl::compiler::runtime::{Runtime, Terminate};
 use vrl::compiler::state::RuntimeState;
-use vrl::compiler::{CompileConfig, TargetValue, TimeZone};
+use vrl::compiler::{TargetValue, TimeZone};
 use vrl::value::{Secrets, Value};
 
 use crate::sample::{event_from_json, external_env};
-use crate::{convert, functions, Diagnostic, LineIndex, VRL_VERSION};
+use crate::{convert, functions, vector, Diagnostic, LineIndex, VRL_VERSION};
 
 /// What happened when the program ran.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -72,8 +72,12 @@ fn timezone() -> TimeZone {
 
 /// Compiles `source` with the shape of `event_json`, runs it against that
 /// event, and reports both.
+///
+/// `enrichment_tables` are what [`crate::check`] takes, for the same reason.
+/// The tables have names here but no rows, so a lookup that runs stops with
+/// Vector's "table not loaded" error.
 #[must_use]
-pub fn run(source: &str, event_json: &str) -> Run {
+pub fn run(source: &str, event_json: &str, enrichment_tables: &[String]) -> Run {
     let index = LineIndex::new(source);
 
     let event = match event_from_json(event_json) {
@@ -83,7 +87,7 @@ pub fn run(source: &str, event_json: &str) -> Run {
 
     // The same verdict the editor shows, so "no errors on screen" and "it
     // runs" can never disagree.
-    let checked = crate::check(source, Some(event_json));
+    let checked = crate::check(source, Some(event_json), enrichment_tables);
     if checked.diagnostics.iter().any(crate::is_error) {
         return Run::failed(checked.diagnostics, None);
     }
@@ -97,19 +101,21 @@ pub fn run(source: &str, event_json: &str) -> Run {
         source,
         functions(),
         &external_env(&event),
-        CompileConfig::default(),
+        vector::compile_config(enrichment_tables),
     ) {
         Ok(result) => result,
         Err(_) => match vrl::compiler::compile_with_external(
             source,
             functions(),
             &crate::sample::unknown_env(),
-            CompileConfig::default(),
+            vector::compile_config(enrichment_tables),
         ) {
             Ok(result) => result,
             Err(diagnostics) => return Run::failed(convert(&diagnostics, &index), None),
         },
     };
+
+    vector::finish_loading(&result.config);
 
     let mut target = TargetValue {
         value: event,
@@ -146,8 +152,12 @@ pub fn run(source: &str, event_json: &str) -> Run {
 /// # Errors
 ///
 /// Only if the answer fails to serialise, which would be a bug in this crate.
-pub fn run_json(source: &str, event_json: &str) -> serde_json::Result<String> {
-    serde_json::to_string(&run(source, event_json))
+pub fn run_json(
+    source: &str,
+    event_json: &str,
+    enrichment_tables: &[String],
+) -> serde_json::Result<String> {
+    serde_json::to_string(&run(source, event_json, enrichment_tables))
 }
 
 /// A VRL value as JSON.
@@ -169,7 +179,7 @@ mod tests {
 
     #[test]
     fn a_program_transforms_the_event() {
-        let result = run(".status = to_int!(.status)\n", r#"{"status":"200"}"#);
+        let result = run(".status = to_int!(.status)\n", r#"{"status":"200"}"#, &[]);
 
         assert!(result.compiled, "{:?}", result.diagnostics);
         assert_eq!(event(&result)["status"], serde_json::json!(200));
@@ -180,7 +190,7 @@ mod tests {
         // With no sample this is E103: `.message` might not be a string. With
         // one, the compiler knows it is, and the program compiles untouched.
         let source = ".parsed = parse_json!(.message)\n.len = length(string!(.message))\n";
-        let result = run(source, r#"{"message":"{\"a\":1}"}"#);
+        let result = run(source, r#"{"message":"{\"a\":1}"}"#, &[]);
 
         assert!(result.compiled, "{:?}", result.diagnostics);
         assert_eq!(event(&result)["parsed"], serde_json::json!({"a": 1}));
@@ -188,7 +198,7 @@ mod tests {
 
     #[test]
     fn a_field_the_sample_does_not_have_is_null_not_a_guess() {
-        let result = run(".copy = .missing\n", r#"{"message":"hello"}"#);
+        let result = run(".copy = .missing\n", r#"{"message":"hello"}"#, &[]);
 
         assert!(result.compiled, "{:?}", result.diagnostics);
         assert_eq!(event(&result)["copy"], serde_json::Value::Null);
@@ -197,23 +207,30 @@ mod tests {
     #[test]
     fn the_programs_own_return_value_is_reported() {
         // What a `filter` condition is judged on.
-        let result = run(".status == 200\n", r#"{"status":200}"#);
+        let result = run(".status == 200\n", r#"{"status":200}"#, &[]);
 
         assert_eq!(result.output, Some(serde_json::json!(true)));
     }
 
     #[test]
     fn an_abort_is_reported_as_a_decision_not_a_failure() {
-        let result = run("abort\n", r#"{"message":"hello"}"#);
+        let result = run("abort\n", r#"{"message":"hello"}"#, &[]);
 
         assert!(result.compiled);
-        assert!(result.aborted, "abort has to be distinguishable from an error");
+        assert!(
+            result.aborted,
+            "abort has to be distinguishable from an error"
+        );
         assert!(result.error.is_some());
     }
 
     #[test]
     fn a_runtime_error_is_reported_with_the_event_as_it_stands() {
-        let result = run(".first = \"done\"\n.n = to_int!(.message)\n", r#"{"message":"nope"}"#);
+        let result = run(
+            ".first = \"done\"\n.n = to_int!(.message)\n",
+            r#"{"message":"nope"}"#,
+            &[],
+        );
 
         assert!(result.compiled);
         assert!(!result.aborted);
@@ -233,6 +250,7 @@ mod tests {
         let result = run(
             ".host = string(.hostname) ?? \"unknown\"\n",
             r#"{"hostname":"web-01"}"#,
+            &[],
         );
 
         assert!(result.compiled, "{:?}", result.diagnostics);
@@ -241,7 +259,11 @@ mod tests {
 
     #[test]
     fn a_program_that_does_not_compile_runs_nothing() {
-        let result = run(".parsed = parse_json(.message)\n", r#"{"message":"hi"}"#);
+        let result = run(
+            ".parsed = parse_json(.message)\n",
+            r#"{"message":"hi"}"#,
+            &[],
+        );
 
         assert!(!result.compiled);
         assert!(!result.diagnostics.is_empty());
@@ -250,11 +272,14 @@ mod tests {
 
     #[test]
     fn a_broken_sample_is_reported_as_such() {
-        let result = run(".x = 1\n", "not json at all");
+        let result = run(".x = 1\n", "not json at all", &[]);
 
         assert!(!result.compiled);
         assert!(result.sample_error.is_some());
-        assert!(result.diagnostics.is_empty(), "the program was never the problem");
+        assert!(
+            result.diagnostics.is_empty(),
+            "the program was never the problem"
+        );
     }
 
     /// Metadata is a separate document from the event, and a program can write
@@ -264,7 +289,7 @@ mod tests {
     /// with no sample at all, since a sample says nothing about metadata.
     #[test]
     fn metadata_survives_the_program() {
-        let result = run("%origin = \"editor\"\n", r#"{"message":"hello"}"#);
+        let result = run("%origin = \"editor\"\n", r#"{"message":"hello"}"#, &[]);
 
         assert!(result.compiled, "{:?}", result.diagnostics);
         assert_eq!(
@@ -275,7 +300,11 @@ mod tests {
 
     #[test]
     fn timestamps_come_out_the_way_vector_writes_them() {
-        let result = run(".at = t'2024-01-01T00:00:00Z'\n", r#"{"message":"hello"}"#);
+        let result = run(
+            ".at = t'2024-01-01T00:00:00Z'\n",
+            r#"{"message":"hello"}"#,
+            &[],
+        );
 
         assert_eq!(
             event(&result)["at"],
@@ -285,7 +314,7 @@ mod tests {
 
     #[test]
     fn the_answer_serialises_as_camel_case_json() {
-        let json = run_json(".x = 1\n", "{}").expect("serialises");
+        let json = run_json(".x = 1\n", "{}", &[]).expect("serialises");
 
         assert!(json.contains("\"vrlVersion\""), "{json}");
         assert!(json.contains("\"sampleError\":null"), "{json}");

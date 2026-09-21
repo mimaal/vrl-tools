@@ -1,4 +1,5 @@
-//! Compiles every example the standard library ships.
+//! Compiles every example the standard library ships, and every example of
+//! the functions Vector adds to it.
 //!
 //! The `vrl` crate documents each function with runnable examples, and those
 //! examples are the closest thing to a real corpus that can be had without
@@ -55,8 +56,14 @@ fn is_exempt(function: &str, title: &str) -> bool {
     EMBEDS_A_HOST_PATH.contains(&entry) || READS_A_REPOSITORY_FIXTURE.contains(&entry)
 }
 
+/// The table Vector's enrichment examples look up. Declaring it is what the
+/// config those examples assume would do.
+fn tables() -> Vec<String> {
+    vec!["test".to_owned()]
+}
+
 fn is_error(source: &str) -> Option<String> {
-    let result = check(source, None);
+    let result = check(source, None, &tables());
     result
         .diagnostics
         .into_iter()
@@ -69,12 +76,12 @@ fn every_documented_example_compiles() {
     let mut failures = Vec::new();
     let mut checked = 0;
 
-    for function in vrl::stdlib::all() {
+    for function in vector_vrl_functions::all() {
         for example in function.examples() {
             if example.result.is_err() {
                 // Documented failures: compiling must not panic, but the
                 // program is allowed to be rejected.
-                let _ = check(example.source, None);
+                let _ = check(example.source, None, &tables());
                 continue;
             }
 

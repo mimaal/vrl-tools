@@ -94,9 +94,10 @@ export interface StdlibFunction {
 }
 
 interface WasmModule {
-  check(source: string, sampleEventJson?: string): string;
-  run(source: string, eventJson: string): string;
+  check(source: string, sampleEventJson?: string, enrichmentTables?: string[]): string;
+  run(source: string, eventJson: string, enrichmentTables?: string[]): string;
   topology(source: string, fileName: string): string;
+  enrichment_tables(source: string, fileName: string): string[] | undefined;
   stdlib(): string;
   vrl_version(): string;
 }
@@ -130,14 +131,30 @@ function load(): WasmModule {
   return wasm;
 }
 
-/** Compiles `source` with the real VRL compiler. */
-export function check(source: string, sampleEventJson?: string): Check {
-  return JSON.parse(load().check(source, sampleEventJson)) as Check;
+/**
+ * Compiles `source` with the real VRL compiler, against the enrichment
+ * tables a Vector config would declare.
+ */
+export function check(
+  source: string,
+  sampleEventJson?: string,
+  enrichmentTables: readonly string[] = [],
+): Check {
+  return JSON.parse(load().check(source, sampleEventJson, [...enrichmentTables])) as Check;
 }
 
 /** Compiles `source` against `eventJson` and runs it. */
-export function run(source: string, eventJson: string): RunResult {
-  return JSON.parse(load().run(source, eventJson)) as RunResult;
+export function run(
+  source: string,
+  eventJson: string,
+  enrichmentTables: readonly string[] = [],
+): RunResult {
+  return JSON.parse(load().run(source, eventJson, [...enrichmentTables])) as RunResult;
+}
+
+/** The enrichment table names a Vector config declares, or undefined if it does not parse. */
+export function enrichmentTables(source: string, fileName: string): string[] | undefined {
+  return load().enrichment_tables(source, fileName);
 }
 
 /** Reads a Vector configuration and resolves its topology. */
@@ -162,8 +179,12 @@ export function stdlib(): Stdlib {
 let cachedStdlib: Stdlib | undefined;
 
 /** Only the diagnostics that stop a program from compiling. */
-export function errorsIn(source: string, sampleEventJson?: string): CheckDiagnostic[] {
-  return check(source, sampleEventJson).diagnostics.filter(
+export function errorsIn(
+  source: string,
+  sampleEventJson?: string,
+  enrichmentTables: readonly string[] = [],
+): CheckDiagnostic[] {
+  return check(source, sampleEventJson, enrichmentTables).diagnostics.filter(
     (diagnostic) => diagnostic.severity === 'error' || diagnostic.severity === 'bug',
   );
 }
