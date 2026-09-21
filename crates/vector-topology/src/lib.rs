@@ -12,6 +12,7 @@
 
 pub mod config;
 pub mod graph;
+pub mod layout;
 pub mod outputs;
 pub mod render;
 
@@ -20,6 +21,7 @@ pub use config::{
     ConfigError, Input, Role,
 };
 pub use graph::{build, Edge, Finding, Graph, Severity};
+pub use layout::{layout, Layout, Placement, Route, Slot};
 pub use render::{diagram, document};
 
 /// Which parser to read a config with.
@@ -57,6 +59,9 @@ pub struct Analysis {
     pub components: Vec<Component>,
     pub edges: Vec<Edge>,
     pub findings: Vec<Finding>,
+    /// Where each component goes when drawn, by column and row. See
+    /// [`layout`].
+    pub layout: Layout,
 }
 
 /// Reads `source` and returns everything that can be said about it.
@@ -74,9 +79,11 @@ pub fn analyse(source: &str, format: Format, title: &str) -> Result<Analysis, Co
     };
 
     let graph = build(components);
+    let layout = layout(&graph);
 
     Ok(Analysis {
         document: document(&graph, title),
+        layout,
         components: graph.components,
         edges: graph.edges,
         findings: graph.findings,

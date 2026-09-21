@@ -34,7 +34,9 @@
   },
   "main": "./out/extension.js",
   "activationEvents": [
-    "onLanguage:vrl"
+    "onLanguage:vrl",
+    "onLanguage:yaml",
+    "onLanguage:toml"
   ],
   "contributes": {
     "languages": [
@@ -88,10 +90,24 @@
         "command": "vrl-tools.showPipelineGraph",
         "title": "Show pipeline graph",
         "category": "VRL",
+        "icon": "$(type-hierarchy-sub)",
+        "enablement": "editorLangId == yaml || editorLangId == toml"
+      },
+      {
+        "command": "vrl-tools.exportPipelineGraph",
+        "title": "Export pipeline graph as Markdown",
+        "category": "VRL",
         "enablement": "editorLangId == yaml || editorLangId == toml"
       }
     ],
     "menus": {
+      "editor/title": [
+        {
+          "command": "vrl-tools.showPipelineGraph",
+          "when": "vrl-tools.isVectorConfig",
+          "group": "navigation"
+        }
+      ],
       "editor/context": [
         {
           "command": "vrl-tools.runOnSampleEvent",
@@ -100,7 +116,7 @@
         },
         {
           "command": "vrl-tools.showPipelineGraph",
-          "when": "editorLangId == yaml || editorLangId == toml",
+          "when": "vrl-tools.isVectorConfig",
           "group": "navigation"
         }
       ]

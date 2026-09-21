@@ -55,10 +55,9 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(...registerLanguageFeatures(checker, output));
   context.subscriptions.push(...registerRun(checker, samples, tables, output));
 
-  // Vector configs, not .vrl files: the graph command is the one thing here
-  // that works on a YAML or TOML document, which is why it activates by being
-  // invoked rather than by a language.
-  context.subscriptions.push(...registerTopology(checker, output));
+  // Vector configs, not .vrl files: the graph is the one thing here that
+  // works on a YAML or TOML document.
+  context.subscriptions.push(...registerTopology(checker, output, context.extensionUri));
 }
 
 export function deactivate(): void {

@@ -1,0 +1,346 @@
+/*
+ * The pipeline graph panel. Every colour comes from the VS Code theme, so the
+ * graph looks like it belongs in whichever theme it is opened in, light, dark
+ * or high contrast, with nothing to maintain per theme.
+ */
+
+:root {
+  --source: var(--vscode-charts-green, #3fb950);
+  --transform: var(--vscode-charts-blue, #4a9eff);
+  --sink: var(--vscode-charts-purple, #b180d7);
+  --error: var(--vscode-errorForeground, #f14c4c);
+  --warning: var(--vscode-editorWarning-foreground, #cca700);
+  --muted: var(--vscode-descriptionForeground, #8b949e);
+  --surface: var(--vscode-editorWidget-background, #252526);
+  --border: var(--vscode-widget-border, rgba(128, 128, 128, 0.35));
+  --edge: var(--vscode-editorLineNumber-foreground, #6e7681);
+  --edge-active: var(--vscode-focusBorder, #007fd4);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--vscode-editor-background);
+  color: var(--vscode-editor-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size, 13px);
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- toolbar ---------- */
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+  flex-wrap: wrap;
+}
+
+header h1 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#summary {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.legend {
+  display: flex;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.legend span::before {
+  content: '';
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+
+.legend .source::before { background: var(--source); }
+.legend .transform::before { background: var(--transform); }
+.legend .sink::before { background: var(--sink); }
+
+.spacer {
+  flex: 1;
+}
+
+button {
+  font: inherit;
+  font-size: 12px;
+  color: var(--vscode-button-secondaryForeground, var(--vscode-editor-foreground));
+  background: var(--vscode-button-secondaryBackground, var(--surface));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--vscode-button-secondaryHoverBackground, var(--surface));
+}
+
+button:focus-visible {
+  outline: 1px solid var(--edge-active);
+  outline-offset: 1px;
+}
+
+/* ---------- banner for a config that does not parse ---------- */
+
+#banner {
+  display: none;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--vscode-inputValidation-warningBackground, rgba(204, 167, 0, 0.12));
+  color: var(--vscode-editor-foreground);
+  font-size: 12px;
+}
+
+#banner.visible {
+  display: block;
+}
+
+/* ---------- canvas ---------- */
+
+main {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+svg#canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: grab;
+  user-select: none;
+}
+
+svg#canvas.panning {
+  cursor: grabbing;
+}
+
+#empty {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  text-align: center;
+  padding: 24px;
+}
+
+#empty.visible {
+  display: flex;
+}
+
+/* ---------- nodes ---------- */
+
+.node {
+  cursor: pointer;
+}
+
+.node .card {
+  fill: var(--surface);
+  stroke: var(--border);
+  stroke-width: 1;
+  transition: stroke 120ms, filter 120ms;
+}
+
+.node .accent {
+  stroke: none;
+}
+
+.node.source .accent { fill: var(--source); }
+.node.transform .accent { fill: var(--transform); }
+.node.sink .accent { fill: var(--sink); }
+
+.node .role {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.node.source .role { fill: var(--source); }
+.node.transform .role { fill: var(--transform); }
+.node.sink .role { fill: var(--sink); }
+
+.node .id {
+  fill: var(--vscode-editor-foreground);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.node .type {
+  fill: var(--muted);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+}
+
+.node:hover .card,
+.node:focus-visible .card {
+  stroke: var(--edge-active);
+  stroke-width: 1.5;
+}
+
+.node:focus {
+  outline: none;
+}
+
+.node.has-warning .card {
+  stroke: var(--warning);
+  stroke-width: 1.5;
+}
+
+.node.has-error .card {
+  stroke: var(--error);
+  stroke-width: 2;
+}
+
+.badge circle {
+  stroke: var(--vscode-editor-background);
+  stroke-width: 2;
+}
+
+.badge.error circle { fill: var(--error); }
+.badge.warning circle { fill: var(--warning); }
+
+.badge text {
+  fill: var(--vscode-editor-background);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+/* ---------- edges ---------- */
+
+.edge path {
+  fill: none;
+  stroke: var(--edge);
+  stroke-width: 1.5;
+  transition: stroke 120ms, opacity 120ms;
+}
+
+.edge.backwards path {
+  stroke: var(--error);
+  stroke-dasharray: 5 4;
+}
+
+.edge-label rect {
+  fill: var(--vscode-editor-background);
+  stroke: var(--border);
+}
+
+.edge-label text {
+  fill: var(--muted);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 10.5px;
+}
+
+marker#arrow path { fill: var(--edge); }
+marker#arrow-active path { fill: var(--edge-active); }
+marker#arrow-error path { fill: var(--error); }
+
+/*
+ * Hovering a component lights up the whole path events take through it:
+ * everything upstream that can reach it and everything downstream it can
+ * reach. The rest of the graph steps back.
+ */
+svg.tracing .node:not(.on-path),
+svg.tracing .edge:not(.on-path),
+svg.tracing .edge-label:not(.on-path) {
+  opacity: 0.25;
+}
+
+svg.tracing .edge.on-path path {
+  stroke: var(--edge-active);
+  stroke-width: 2;
+}
+
+/* ---------- problems ---------- */
+
+#problems {
+  flex: none;
+  max-height: 30%;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+  display: none;
+}
+
+#problems.visible {
+  display: block;
+}
+
+#problems h2 {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 8px 14px 4px;
+}
+
+#problems ul {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 6px;
+}
+
+#problems li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 3px 14px;
+  cursor: pointer;
+}
+
+#problems li:hover {
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.1));
+}
+
+#problems .severity {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  min-width: 56px;
+}
+
+#problems .severity.error { color: var(--error); }
+#problems .severity.warning { color: var(--warning); }
+
+#problems .line {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+#problems code {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.95em;
+}

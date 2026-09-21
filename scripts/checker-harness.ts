@@ -42,6 +42,18 @@ export interface Topology {
     readonly message: string;
     readonly range: { readonly start: { readonly line: number } };
   }[];
+  readonly layout: {
+    readonly components: readonly {
+      readonly component: number;
+      readonly column: number;
+      readonly row: number;
+    }[];
+    readonly routes: readonly {
+      readonly from: number;
+      readonly to: number;
+      readonly via: readonly { readonly column: number; readonly row: number }[];
+    }[];
+  };
 }
 
 /** Mirrors `vrl_check_core::Run`. */

@@ -6,6 +6,18 @@ extension is.
 
 ## Unreleased
 
+- **The pipeline graph has its own panel and a button to open it.** A Vector
+  config in the editor gets a graph icon in the title bar (only a config: a
+  Kubernetes manifest does not). The panel draws sources, transforms and sinks
+  in the theme's colours, with named outputs on their arrows and problems
+  marked on the component they belong to. Hovering a component lights up
+  every path events take through it; clicking one goes to it in the config.
+  It redraws as the config is edited and keeps the last good graph while the
+  file does not parse. The Markdown with a Mermaid diagram is still there, as
+  "Export Markdown", for committing next to the config.
+- The layout is computed in the wasm module: columns follow the flow, sinks
+  line up on the right, and an arrow that skips columns runs in a lane between
+  the boxes instead of through them.
 - **Vector's own VRL functions are no longer "undefined".** A `remap`
   transform compiles against the standard library plus what Vector adds to it,
   and the checker only knew the first half, so every

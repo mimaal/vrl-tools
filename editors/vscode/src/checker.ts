@@ -110,6 +110,15 @@ export interface Topology {
   readonly components: readonly TopologyComponent[];
   readonly edges: readonly TopologyEdge[];
   readonly findings: readonly TopologyFinding[];
+  /** Where each component goes when drawn: column left to right, row top to bottom. */
+  readonly layout: readonly TopologyPlacement[];
+}
+
+export interface TopologyPlacement {
+  /** Index into `components`. */
+  readonly component: number;
+  readonly column: number;
+  readonly row: number;
 }
 
 export interface TopologyComponent {

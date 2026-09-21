@@ -486,6 +486,28 @@ async function checkTopology(): Promise<void> {
     return;
   }
 
+  // What the graph panel draws from. Every component has a place, and every
+  // arrow points right: a panel receiving anything else would draw arrows
+  // through boxes or boxes on top of each other.
+  const placed = named.layout.components;
+  const column = (id: string): number => {
+    const index = named.components.findIndex((c) => c.id === id);
+    return placed.find((p) => p.component === index)?.column ?? -1;
+  };
+  const places = new Set(placed.map((p) => `${p.column}:${p.row}`));
+  if (placed.length !== named.components.length || places.size !== placed.length) {
+    fail('the layout places every component once', JSON.stringify(named.layout));
+  } else if (named.edges.some((edge) => column(edge.from) >= column(edge.to))) {
+    fail('every arrow in the layout points right', JSON.stringify(named.layout));
+  } else if (named.layout.routes.length === 0) {
+    fail(
+      'an arrow skipping columns crosses in a lane',
+      `strict.dropped skips a column but no route came back: ${JSON.stringify(named.layout)}`,
+    );
+  } else {
+    ok('the layout crosses the boundary: every component placed, arrows right, lanes for long ones');
+  }
+
   const dropped = named.edges.find((edge) => edge.output === 'dropped');
   if (dropped && dropped.from === 'strict' && dropped.to === 'leftovers') {
     ok('a named output arrives with its edge');
