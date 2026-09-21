@@ -4,6 +4,34 @@ Versions before 0.5.0 were never published; they exist as tags and as `.vsix`
 files built locally. They are listed here because the history explains what the
 extension is.
 
+## 0.6.3 — 2026-09-21
+
+- **Large pipelines are navigable.** The wheel scrolls the graph and
+  Ctrl+wheel (or a pinch) zooms, as elsewhere in the editor, instead of every
+  wheel turn zooming. `Ctrl+F` finds a component by name, type or file and
+  `Enter` steps through the matches. Clicking a component keeps its paths lit
+  and shows its type, where it is declared and how much is upstream and
+  downstream of it; **Show only its paths** redraws just that part, laid out
+  on its own, and **Show all** or `Esc` goes back. Double-click opens the
+  component in the config. Zoomed out, boxes show only their names, in a
+  size that can be read, and output labels only on the lit path. A minimap
+  appears when the graph does not fit. `+`, `-`, `0` and the arrow keys work
+  too.
+- Arrows that skip columns take the room of lines, not of boxes: a bundle of
+  them no longer doubles the height of the graph.
+- **Input patterns are resolved the way Vector resolves them.** Vector
+  matches every input as a glob against the outputs of every component,
+  written `id` or `id.port`, so `*_route.errors` takes the `errors` output of
+  every router ending in `_route`, and `app*` takes `app.dropped` along with
+  `app`. The graph matched patterns against component names only, so the
+  first was reported as matching nothing. `?` and `[...]` classes work too.
+- A `route` or `exclusive_route` read by its bare name is now an error, as it
+  is in Vector: neither has a default output. The message lists the outputs
+  it does have.
+- `exclusive_route` is understood: its `routes` list names its outputs, and it
+  always has `_unmatched`. Before, reading one of its outputs was reported as
+  an error.
+
 ## 0.6.2 — 2026-09-21
 
 - **A pipeline split across several files is drawn whole.** Vector started

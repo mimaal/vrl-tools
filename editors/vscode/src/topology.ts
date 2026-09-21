@@ -154,6 +154,7 @@ function activeConfig(): vscode.TextDocument | undefined {
 async function analyse(
   checker: VrlChecker,
   document: vscode.TextDocument,
+  focus?: string,
 ): Promise<{ pipeline: Pipeline; analysis: Topology }> {
   const pipeline = await pipelineOf(document);
   const files = pipeline.files.map((file) => ({
@@ -162,7 +163,7 @@ async function analyse(
     name: sameFile(file.uri, document.uri) ? relativeConfigName(file.name, document) : file.name,
     source: file.source,
   }));
-  return { pipeline, analysis: checker.topologyFiles(files, pipeline.title) };
+  return { pipeline, analysis: checker.topologyFiles(files, pipeline.title, focus) };
 }
 
 /** A file's name as given, with its format appended when the name has none. */
@@ -195,7 +196,8 @@ async function exportMarkdown(
 type FromWebview =
   | { readonly type: 'ready' }
   | { readonly type: 'export' }
-  | { readonly type: 'reveal'; readonly range: VrlRange; readonly file: number };
+  | { readonly type: 'reveal'; readonly range: VrlRange; readonly file: number }
+  | { readonly type: 'focus'; readonly id: string | null };
 
 /**
  * The one graph panel.
@@ -214,6 +216,8 @@ class GraphPanel implements vscode.Disposable {
   private files: readonly PipelineFile[] = [];
   /** Whether a complete graph has been drawn since the panel opened. */
   private drawn = false;
+  /** The component the graph is narrowed to, if the person asked for that. */
+  private focus: string | undefined;
   private pending: NodeJS.Timeout | undefined;
   /** The draw in flight, so a burst of edits does not interleave reads. */
   private generation = 0;
@@ -251,6 +255,7 @@ class GraphPanel implements vscode.Disposable {
           // A config from another pipeline, or one opened on its own.
           this.shown = editor.document;
           this.drawn = false;
+          this.focus = undefined;
           void this.post(true);
         }
       }),
@@ -287,6 +292,7 @@ class GraphPanel implements vscode.Disposable {
       this.panel.reveal(vscode.ViewColumn.Beside, true);
       if (changed) {
         this.drawn = false;
+        this.focus = undefined;
         void this.post(true);
       }
       return;
@@ -311,6 +317,7 @@ class GraphPanel implements vscode.Disposable {
     this.panel.onDidDispose(() => {
       this.panel = undefined;
       this.files = [];
+      this.focus = undefined;
       clearTimeout(this.pending);
     });
   }
@@ -332,6 +339,10 @@ class GraphPanel implements vscode.Disposable {
         void this.reveal(file ? file.uri : document.uri, message.range);
         break;
       }
+      case 'focus':
+        this.focus = message.id ?? undefined;
+        void this.post(true);
+        break;
     }
   }
 
@@ -366,7 +377,7 @@ class GraphPanel implements vscode.Disposable {
 
     let result: { pipeline: Pipeline; analysis: Topology };
     try {
-      result = await analyse(this.checker, document);
+      result = await analyse(this.checker, document, this.focus);
     } catch (error) {
       this.output.appendLine(`Graphing ${document.uri.fsPath} failed: ${String(error)}`);
       return;
@@ -378,6 +389,10 @@ class GraphPanel implements vscode.Disposable {
 
     const { pipeline, analysis } = result;
     this.panel.title = `Graph: ${pipeline.title}`;
+    // The focused component was renamed or deleted: back to everything.
+    if (this.focus && !analysis.focus) {
+      this.focus = undefined;
+    }
 
     // A file that does not parse right now is a file being typed. Its
     // components are missing from this analysis, so drawing it would show
@@ -435,9 +450,10 @@ function html(webview: vscode.Webview, media: vscode.Uri): string {
   <header>
     <h1 id="title"></h1>
     <span id="summary"></span>
-    <span class="legend"><span class="source">source</span><span class="transform">transform</span><span class="sink">sink</span></span>
+    <span id="focus-pill" role="status">Paths through <strong id="focus-name"></strong><button id="unfocus" title="Show the whole pipeline (Esc)">Show all</button></span>
     <span class="spacer"></span>
-    <button id="fit" title="Fit the whole pipeline in view">Fit</button>
+    <span class="search"><input id="search" type="search" placeholder="Find a component (Ctrl+F)" aria-label="Find a component by name, type or file" spellcheck="false"><span id="match-count" aria-live="polite"></span></span>
+    <button id="fit" title="Fit the whole pipeline in view (0)">Fit</button>
     <button id="export" title="Open as Markdown with a Mermaid diagram, to save next to the config">Export Markdown</button>
   </header>
   <div id="banner" role="status"></div>
@@ -450,8 +466,11 @@ function html(webview: vscode.Webview, media: vscode.Uri): string {
       </defs>
       <g id="viewport"><g id="edges"></g><g id="labels"></g><g id="nodes"></g></g>
     </svg>
+    <svg id="minimap" aria-hidden="true"></svg>
+    <div id="hint"><span class="legend"><span class="source">source</span><span class="transform">transform</span><span class="sink">sink</span></span><span>Scroll to move · Ctrl+scroll to zoom · Click a component to follow its paths</span></div>
     <div id="empty">No sources, transforms or sinks yet.<br>Components appear here as the config declares them.</div>
   </main>
+  <div id="details" role="region" aria-label="Selected component"></div>
   <section id="problems"><h2>Problems</h2><ul id="problem-list"></ul></section>
   <script nonce="${nonce}" src="${script.toString()}"></script>
 </body>

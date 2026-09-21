@@ -84,6 +84,56 @@ pub fn build(components: Vec<Component>) -> Graph {
     }
 }
 
+/// The part of `graph` events can take through `id`: everything that can
+/// reach it, everything it can reach, and the edges between them.
+///
+/// For a large pipeline this is usually the question being asked — "where do
+/// the nginx logs go?" — and the answer is a handful of components out of
+/// dozens. The findings are kept whole: a problem elsewhere in the pipeline
+/// is still a problem, and the list under the graph still says so.
+///
+/// `None` when no component is called `id`.
+#[must_use]
+pub fn focus(graph: &Graph, id: &str) -> Option<Graph> {
+    if !graph.components.iter().any(|c| c.id == id) {
+        return None;
+    }
+
+    let walk = |forward: bool| {
+        let mut seen = vec![id.to_owned()];
+        let mut queue = vec![id.to_owned()];
+        while let Some(current) = queue.pop() {
+            for edge in &graph.edges {
+                let (near, far) = if forward { (&edge.from, &edge.to) } else { (&edge.to, &edge.from) };
+                if *near == current && !seen.contains(far) {
+                    seen.push(far.clone());
+                    queue.push(far.clone());
+                }
+            }
+        }
+        seen
+    };
+    let upstream = walk(false);
+    let downstream = walk(true);
+    let kept = |name: &String| upstream.contains(name) || downstream.contains(name);
+
+    Some(Graph {
+        components: graph.components.iter().filter(|c| kept(&c.id)).cloned().collect(),
+        // Only edges that lie on a path through `id`: both ends upstream, or
+        // both downstream. A sibling feeding the same sink is not on the way.
+        edges: graph
+            .edges
+            .iter()
+            .filter(|e| {
+                (upstream.contains(&e.from) && upstream.contains(&e.to))
+                    || (downstream.contains(&e.from) && downstream.contains(&e.to))
+            })
+            .cloned()
+            .collect(),
+        findings: graph.findings.clone(),
+    })
+}
+
 fn resolve(
     input: &crate::config::Input,
     consumer: &Component,
@@ -91,12 +141,17 @@ fn resolve(
     edges: &mut Vec<Edge>,
     findings: &mut Vec<Finding>,
 ) {
-    if input.text.contains('*') {
-        let matched: Vec<&Component> = components
-            .iter()
-            .filter(|candidate| candidate.role != Role::Sink)
-            .filter(|candidate| candidate.id != consumer.id)
-            .filter(|candidate| matches_glob(&input.text, &candidate.id))
+    // A pattern is matched the way Vector's `expand_globs` matches it: against
+    // every output of every source and transform, each written as Vector
+    // writes an output — `id` for a default output, `id.port` for a named one.
+    // So `*_route.errors` picks the `errors` output of every router it names,
+    // and `app*` takes `app.dropped` along with `app`. The consumer's own
+    // name is the one thing left out.
+    if is_glob(&input.text) {
+        let matched: Vec<(&Component, Option<&String>)> = outputs_of(components)
+            .filter(|(_, _, written)| *written != consumer.id)
+            .filter(|(_, _, written)| matches_glob(&input.text, written))
+            .map(|(producer, output, _)| (producer, output))
             .collect();
 
         if matched.is_empty() {
@@ -114,10 +169,10 @@ fn resolve(
             return;
         }
 
-        for producer in matched {
+        for (producer, output) in matched {
             edges.push(Edge {
                 from: producer.id.clone(),
-                output: None,
+                output: output.cloned(),
                 to: consumer.id.clone(),
                 range: input.range,
                 file: consumer.file,
@@ -190,6 +245,28 @@ fn push_default_edge(
         findings.push(Finding {
             severity: Severity::Error,
             message: format!("`{}` reads from itself", consumer.id),
+            range: input.range,
+            file: consumer.file,
+        });
+        return;
+    }
+
+    // A router has no default output, so its bare name is not an output
+    // Vector knows ("doesn't match any components"). Which ones it does have
+    // is the useful thing to say.
+    if !producer.default_output {
+        findings.push(Finding {
+            severity: Severity::Error,
+            message: format!(
+                "`{}` has no default output, so an input has to name one of its outputs: {}",
+                producer.id,
+                producer
+                    .named_outputs
+                    .iter()
+                    .map(|output| format!("`{}.{output}`", producer.id))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
             range: input.range,
             file: consumer.file,
         });
@@ -312,38 +389,89 @@ fn reaches<'a>(from: &str, target: &str, edges: &'a [Edge], seen: &mut Vec<&'a s
     false
 }
 
-/// Matches a Vector `inputs` pattern against a component ID.
-///
-/// Vector documents `*` and nothing else, so that is all this does. A pattern
-/// with no `*` never reaches here.
-fn matches_glob(pattern: &str, id: &str) -> bool {
-    let mut parts = pattern.split('*');
+/// Every output a component can be read from, as Vector writes it: `id` for
+/// the default output of a component that has one, `id.port` for each named
+/// output. Sinks have none.
+fn outputs_of(components: &[Component]) -> impl Iterator<Item = (&Component, Option<&String>, String)> {
+    components
+        .iter()
+        .filter(|component| component.role != Role::Sink)
+        .flat_map(|component| {
+            let default = component
+                .default_output
+                .then(|| (component, None, component.id.clone()));
+            let named = component
+                .named_outputs
+                .iter()
+                .map(move |output| (component, Some(output), format!("{}.{output}", component.id)));
+            default.into_iter().chain(named)
+        })
+}
 
-    let Some(first) = parts.next() else {
-        return false;
+/// Whether an input is a pattern rather than a name. Vector passes every
+/// input through `glob::Pattern`; one without these characters can only match
+/// itself, which the exact lookup handles with better error messages.
+fn is_glob(input: &str) -> bool {
+    input.contains(['*', '?', '['])
+}
+
+/// Matches a pattern the way `glob::Pattern::matches` does with its default
+/// options, which is what Vector's `expand_globs` uses: `*` is any run of
+/// characters (dots included), `?` any one character, `[abc]`, `[a-z]` and
+/// `[!abc]` a class. A `[` with no closing `]` is taken literally, where the
+/// glob crate would reject the pattern and Vector would fall back to the
+/// literal string.
+fn matches_glob(pattern: &str, text: &str) -> bool {
+    let pattern: Vec<char> = pattern.chars().collect();
+    let text: Vec<char> = text.chars().collect();
+    glob_from(&pattern, &text)
+}
+
+fn glob_from(pattern: &[char], text: &[char]) -> bool {
+    let Some((&first, rest)) = pattern.split_first() else {
+        return text.is_empty();
     };
-    if !id.starts_with(first) {
-        return false;
+
+    match first {
+        '*' => (0..=text.len()).any(|skip| glob_from(rest, &text[skip..])),
+        '?' => !text.is_empty() && glob_from(rest, &text[1..]),
+        '[' => match class(rest) {
+            Some((matches, after)) => {
+                !text.is_empty() && matches(text[0]) && glob_from(after, &text[1..])
+            }
+            None => text.first() == Some(&'[') && glob_from(rest, &text[1..]),
+        },
+        literal => text.first() == Some(&literal) && glob_from(rest, &text[1..]),
     }
+}
 
-    let mut rest = &id[first.len()..];
-    let parts: Vec<&str> = parts.collect();
+/// Parses a `[...]` class whose `[` is already consumed, returning its test
+/// and what follows the `]`, or `None` when it is never closed.
+fn class(pattern: &[char]) -> Option<(impl Fn(char) -> bool, &[char])> {
+    let (negated, body) = match pattern.first() {
+        Some('!') => (true, &pattern[1..]),
+        _ => (false, pattern),
+    };
+    // A `]` right after the opening is a member, not the end.
+    let close = body.iter().skip(1).position(|&c| c == ']')? + 1;
+    let members: Vec<char> = body[..close].to_vec();
+    let after = &body[close + 1..];
 
-    for (position, part) in parts.iter().enumerate() {
-        let last = position + 1 == parts.len();
-
-        if last {
-            // The tail has to land at the end, not merely somewhere after.
-            return rest.len() >= part.len() && rest.ends_with(part);
+    let test = move |c: char| {
+        let mut hit = false;
+        let mut i = 0;
+        while i < members.len() {
+            if i + 2 < members.len() && members[i + 1] == '-' {
+                hit |= members[i] <= c && c <= members[i + 2];
+                i += 3;
+            } else {
+                hit |= members[i] == c;
+                i += 1;
+            }
         }
-
-        match rest.find(part) {
-            Some(at) => rest = &rest[at + part.len()..],
-            None => return false,
-        }
-    }
-
-    true
+        hit != negated
+    };
+    Some((test, after))
 }
 
 fn list(items: &[String]) -> String {

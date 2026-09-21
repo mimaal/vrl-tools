@@ -65,10 +65,8 @@ header h1 {
 }
 
 .legend {
-  display: flex;
-  gap: 12px;
-  color: var(--muted);
-  font-size: 12px;
+  display: inline-flex;
+  gap: 10px;
 }
 
 .legend span::before {
@@ -343,4 +341,200 @@ svg.tracing .edge.on-path path {
 #problems code {
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: 0.95em;
+}
+
+/* ---------- search and focus (header) ---------- */
+
+.search {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#search {
+  font: inherit;
+  font-size: 12px;
+  width: 220px;
+  max-width: 40vw;
+  padding: 3px 8px;
+  color: var(--vscode-input-foreground, var(--vscode-editor-foreground));
+  background: var(--vscode-input-background, var(--surface));
+  border: 1px solid var(--vscode-input-border, var(--border));
+  border-radius: 4px;
+}
+
+#search:focus {
+  outline: 1px solid var(--edge-active);
+  outline-offset: -1px;
+}
+
+#match-count {
+  color: var(--muted);
+  font-size: 12px;
+  min-width: 5.5em;
+  font-variant-numeric: tabular-nums;
+}
+
+#focus-pill {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--edge-active);
+  font-size: 12px;
+}
+
+#focus-pill.visible {
+  display: inline-flex;
+}
+
+#focus-pill button {
+  padding: 1px 8px;
+  border-radius: 999px;
+}
+
+/* ---------- overlays on the canvas ---------- */
+
+#hint {
+  position: absolute;
+  left: 12px;
+  bottom: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  color: var(--muted);
+  font-size: 11.5px;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--vscode-editor-background) 80%, transparent);
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+
+#minimap {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  width: 190px;
+  height: 120px;
+  display: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+#minimap.visible {
+  display: block;
+}
+
+.mini-node { stroke: none; opacity: 0.8; }
+.mini-node.source { fill: var(--source); }
+.mini-node.transform { fill: var(--transform); }
+.mini-node.sink { fill: var(--sink); }
+.mini-node.selected { opacity: 1; stroke: var(--vscode-editor-foreground); stroke-width: 12; }
+
+#mini-view {
+  fill: var(--edge-active);
+  fill-opacity: 0.1;
+  stroke: var(--edge-active);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+/* ---------- the selected component ---------- */
+
+#details {
+  display: none;
+  flex: none;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 7px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 12.5px;
+}
+
+#details.visible {
+  display: flex;
+}
+
+#details code {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+}
+
+#details .muted {
+  color: var(--muted);
+}
+
+#details .spacer {
+  flex: 1;
+}
+
+.chip {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+
+.chip.source { color: var(--source); }
+.chip.transform { color: var(--transform); }
+.chip.sink { color: var(--sink); }
+
+.issues { font-weight: 600; }
+.issues.error { color: var(--error); }
+.issues.warning { color: var(--warning); }
+
+.node.selected .card {
+  stroke: var(--edge-active);
+  stroke-width: 2.5;
+}
+
+/* ---------- search results ---------- */
+
+svg.searching .node:not(.match) {
+  opacity: 0.2;
+}
+
+svg.searching .edge,
+svg.searching .edge-label {
+  opacity: 0.25;
+}
+
+.node.match .card {
+  stroke: var(--vscode-editor-findMatchBorder, var(--warning));
+  stroke-width: 2;
+}
+
+/* ---------- overview: zoomed far out ---------- */
+
+.id-big {
+  visibility: hidden;
+  fill: var(--vscode-editor-foreground);
+  font-size: 22px;
+  font-weight: 600;
+}
+
+svg.overview .detail {
+  visibility: hidden;
+}
+
+svg.overview .id-big {
+  visibility: visible;
+}
+
+/* Output names are only worth their clutter on the path being followed. */
+svg.overview .edge-label:not(.on-path) {
+  display: none;
+}
+
+svg.overview .badge circle {
+  r: 14;
 }

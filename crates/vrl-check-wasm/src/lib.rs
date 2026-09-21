@@ -116,11 +116,12 @@ pub fn topology(source: &str, file_name: &str) -> String {
 /// complete config the way Vector reads the files given to `--config`. The
 /// shape is `vector_topology::Analysis`, whose `files` and `unreadable` say
 /// which file each component and finding is in, and which files did not
-/// parse. See `vector_topology::analyse_files`.
+/// parse. With `focus`, the graph is narrowed to the paths through that
+/// component. See `vector_topology::analyse_files_focused`.
 #[wasm_bindgen]
 #[must_use]
-pub fn topology_files(files_json: &str, title: &str) -> String {
-    vector_topology::analyse_files_json(files_json, title)
+pub fn topology_files(files_json: &str, title: &str, focus: Option<String>) -> String {
+    vector_topology::analyse_files_json(files_json, title, focus.as_deref())
 }
 
 /// The enrichment table names a Vector config declares, which is what

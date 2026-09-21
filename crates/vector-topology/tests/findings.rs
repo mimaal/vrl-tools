@@ -234,3 +234,102 @@ sinks:
         messages(&graph),
     );
 }
+
+/// The two routers and output wildcards, as Vector resolves them.
+#[test]
+fn routers_and_output_wildcards_resolve_without_findings() {
+    let graph = graph("routers.toml");
+
+    assert!(graph.findings.is_empty(), "{:?}", messages(&graph));
+
+    let alerts: Vec<(&str, Option<&str>)> = graph
+        .edges
+        .iter()
+        .filter(|e| e.to == "alerts")
+        .map(|e| (e.from.as_str(), e.output.as_deref()))
+        .collect();
+    assert_eq!(
+        alerts,
+        [("nginx_route", Some("errors")), ("api_route", Some("errors"))],
+        "`*_route.errors` takes the errors output of both routers",
+    );
+
+    assert_eq!(edge(&graph, "by_tier", "gold").output.as_deref(), Some("gold"));
+    assert_eq!(
+        graph.edges.iter().filter(|e| e.to == "other").count(),
+        2,
+        "an exclusive_route's routes and its _unmatched",
+    );
+}
+
+fn inline(source: &str) -> Graph {
+    build(read_yaml(source).expect("parses"))
+}
+
+/// A router has no default output. Vector rejects its bare name; so does
+/// this, and says which outputs there are.
+#[test]
+fn a_router_read_by_its_bare_name_is_an_error() {
+    let graph = inline(
+        "sources:\n  in:\n    type: file\n\
+         transforms:\n  split:\n    type: route\n    inputs: [in]\n    route:\n      errors: '.x'\n\
+         sinks:\n  out:\n    type: console\n    inputs: [split]\n",
+    );
+
+    let message = messages(&graph)
+        .into_iter()
+        .find(|m| m.contains("no default output"))
+        .unwrap_or_else(|| panic!("{:?}", messages(&graph)));
+    assert!(message.contains("`split.errors`") && message.contains("`split._unmatched`"), "{message}");
+}
+
+/// `*` reaches named outputs too: `strict*` takes `strict.dropped` along with
+/// `strict`, as `glob::Pattern` would.
+#[test]
+fn a_wildcard_reaches_named_outputs() {
+    let graph = inline(
+        "sources:\n  in:\n    type: file\n\
+         transforms:\n  strict:\n    type: remap\n    inputs: [in]\n    reroute_dropped: true\n\
+         sinks:\n  out:\n    type: console\n    inputs: ['strict*']\n",
+    );
+
+    let outputs: Vec<Option<&str>> = graph
+        .edges
+        .iter()
+        .filter(|e| e.to == "out")
+        .map(|e| e.output.as_deref())
+        .collect();
+    assert_eq!(outputs, [None, Some("dropped")], "{:?}", graph.edges);
+}
+
+/// `?` and character classes are glob syntax Vector accepts.
+#[test]
+fn question_marks_and_classes_match_like_glob() {
+    let graph = inline(
+        "sources:\n  app1:\n    type: file\n  app2:\n    type: file\n  app10:\n    type: file\n\
+         sinks:\n  one_digit:\n    type: console\n    inputs: ['app?']\n\
+         \x20 only_one:\n    type: console\n    inputs: ['app[1]']\n\
+         \x20 not_one:\n    type: console\n    inputs: ['app[!1]']\n",
+    );
+
+    let from = |sink: &str| -> Vec<&str> {
+        graph.edges.iter().filter(|e| e.to == sink).map(|e| e.from.as_str()).collect()
+    };
+    assert_eq!(from("one_digit"), ["app1", "app2"]);
+    assert_eq!(from("only_one"), ["app1"]);
+    assert_eq!(from("not_one"), ["app2"]);
+}
+
+/// `exclusive_route` in YAML: a list of `{name, condition}`.
+#[test]
+fn an_exclusive_route_is_read_from_yaml() {
+    let graph = inline(
+        "sources:\n  in:\n    type: file\n\
+         transforms:\n  tiers:\n    type: exclusive_route\n    inputs: [in]\n    routes:\n\
+         \x20     - name: gold\n        condition: '.tier == \"gold\"'\n\
+         sinks:\n  out:\n    type: console\n    inputs: [tiers.gold, tiers._unmatched]\n",
+    );
+
+    assert!(graph.findings.is_empty(), "{:?}", messages(&graph));
+    assert_eq!(graph.edges.iter().filter(|e| e.to == "out").count(), 2);
+}

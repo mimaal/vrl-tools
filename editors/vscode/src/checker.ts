@@ -112,6 +112,8 @@ export interface Topology {
   readonly findings: readonly TopologyFinding[];
   /** The files read; a component's or a finding's `file` indexes this. */
   readonly files: readonly string[];
+  /** The component the graph is narrowed to, when it is. */
+  readonly focus: string | null;
   /** Files that did not parse; their components are missing from the graph. */
   readonly unreadable: readonly {
     readonly file: number;
@@ -179,7 +181,7 @@ interface WasmModule {
   run(source: string, eventJson: string, enrichmentTables?: string[]): string;
   stdlib(): string;
   topology(source: string, fileName: string): string;
-  topology_files(filesJson: string, title: string): string;
+  topology_files(filesJson: string, title: string, focus?: string): string;
   enrichment_tables(source: string, fileName: string): string[] | undefined;
   vrl_version(): string;
   vector_release(): string;
@@ -302,10 +304,17 @@ export class VrlChecker {
    * The topology of a pipeline split across several files, each a complete
    * config the way Vector reads the files given to `--config`. A file that
    * does not parse is listed in `unreadable` and the rest are still read.
+   *
+   * With `focus`, the graph is narrowed to the paths through that component
+   * and laid out on its own; a name that no longer exists shows everything.
    */
-  topologyFiles(files: readonly { name: string; source: string }[], title: string): Topology {
+  topologyFiles(
+    files: readonly { name: string; source: string }[],
+    title: string,
+    focus?: string,
+  ): Topology {
     return JSON.parse(
-      this.call((wasm) => wasm.topology_files(JSON.stringify(files), title)),
+      this.call((wasm) => wasm.topology_files(JSON.stringify(files), title, focus)),
     ) as Topology;
   }
 

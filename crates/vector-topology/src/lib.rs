@@ -20,7 +20,7 @@ pub use config::{
     read_toml, read_toml_enrichment_tables, read_yaml, read_yaml_enrichment_tables, Component,
     ConfigError, Input, Role,
 };
-pub use graph::{build, Edge, Finding, Graph, Severity};
+pub use graph::{build, focus, Edge, Finding, Graph, Severity};
 pub use layout::{layout, Layout, Placement, Route, Slot};
 pub use render::{diagram, document, document_of_files};
 
@@ -69,6 +69,8 @@ pub struct Analysis {
     /// missing from the graph, so a caller showing it live will usually want
     /// to keep the last complete one on screen instead.
     pub unreadable: Vec<Unreadable>,
+    /// The component the graph is narrowed to, when it is. See [`focus`].
+    pub focus: Option<String>,
 }
 
 /// One file of a pipeline, as given to [`analyse_files`].
@@ -114,6 +116,7 @@ pub fn analyse(source: &str, format: Format, title: &str) -> Result<Analysis, Co
         findings: graph.findings,
         files: vec![title.to_owned()],
         unreadable: Vec::new(),
+        focus: None,
     })
 }
 
@@ -128,6 +131,15 @@ pub fn analyse(source: &str, format: Format, title: &str) -> Result<Analysis, Co
 /// rest are still read.
 #[must_use]
 pub fn analyse_files(files: &[ConfigFile], title: &str) -> Analysis {
+    analyse_files_focused(files, title, None)
+}
+
+/// [`analyse_files`], narrowed to the paths through one component when
+/// `focus` names one that exists. See [`focus`]. The layout is the narrowed
+/// graph's own, so a handful of components fill the view rather than sitting
+/// where they were in the whole pipeline.
+#[must_use]
+pub fn analyse_files_focused(files: &[ConfigFile], title: &str, focus: Option<&str>) -> Analysis {
     let mut components = Vec::new();
     let mut unreadable = Vec::new();
 
@@ -154,7 +166,11 @@ pub fn analyse_files(files: &[ConfigFile], title: &str) -> Analysis {
     }
 
     let names: Vec<String> = files.iter().map(|file| file.name.clone()).collect();
-    let graph = build(components);
+    let whole = build(components);
+    let (graph, focus) = match focus.and_then(|id| graph::focus(&whole, id).map(|g| (g, id))) {
+        Some((narrowed, id)) => (narrowed, Some(id.to_owned())),
+        None => (whole, None),
+    };
     let layout = layout(&graph);
 
     Analysis {
@@ -165,14 +181,16 @@ pub fn analyse_files(files: &[ConfigFile], title: &str) -> Analysis {
         findings: graph.findings,
         files: names,
         unreadable,
+        focus,
     }
 }
 
-/// [`analyse_files`], taking and giving JSON: an array of `{name, source}`.
+/// [`analyse_files_focused`], taking and giving JSON: an array of
+/// `{name, source}`.
 #[must_use]
-pub fn analyse_files_json(files_json: &str, title: &str) -> String {
+pub fn analyse_files_json(files_json: &str, title: &str, focus: Option<&str>) -> String {
     match serde_json::from_str::<Vec<ConfigFile>>(files_json) {
-        Ok(files) => serde_json::to_string(&analyse_files(&files, title))
+        Ok(files) => serde_json::to_string(&analyse_files_focused(&files, title, focus))
             .unwrap_or_else(|error| error_json(&error.to_string(), None)),
         Err(error) => error_json(&format!("not a list of config files: {error}"), None),
     }
@@ -297,6 +315,30 @@ mod tests {
         assert_eq!(analysis.components.len(), 1);
         assert_eq!(analysis.unreadable.len(), 1);
         assert_eq!(analysis.unreadable[0].file, 1);
+    }
+
+    /// Narrowed to one component, the graph is its paths and nothing else,
+    /// laid out on its own.
+    #[test]
+    fn focusing_keeps_only_the_paths_through_a_component() {
+        let files = [file(
+            "vector.toml",
+            "[sources.a]\ntype = \"file\"\n[sources.b]\ntype = \"file\"\n\
+             [transforms.pa]\ntype = \"remap\"\ninputs = [\"a\"]\n\
+             [transforms.pb]\ntype = \"remap\"\ninputs = [\"b\"]\n\
+             [sinks.out]\ntype = \"console\"\ninputs = [\"pa\", \"pb\"]\n",
+        )];
+
+        let focused = super::analyse_files_focused(&files, "config", Some("pa"));
+        let ids: Vec<&str> = focused.components.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, ["a", "pa", "out"]);
+        assert_eq!(focused.edges.len(), 2, "pb -> out is not on a path through pa");
+        assert_eq!(focused.layout.components.len(), 3);
+        assert_eq!(focused.focus.as_deref(), Some("pa"));
+
+        let unknown = super::analyse_files_focused(&files, "config", Some("gone"));
+        assert_eq!(unknown.components.len(), 5, "a name that went away shows everything");
+        assert_eq!(unknown.focus, None);
     }
 
     #[test]

@@ -2,7 +2,7 @@
   "name": "vrl-tools",
   "displayName": "VRL Tools",
   "description": "Highlighting, snippets and Vector config support for VRL (Vector Remap Language).",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "license": "MIT",
   "publisher": "miguel-martinez",
   "repository": {

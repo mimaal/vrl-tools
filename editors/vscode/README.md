@@ -22,11 +22,19 @@ language used by [Vector](https://vector.dev).
 - **A graph of the pipeline.** Open a Vector config and a graph button appears
   in the editor's title bar. It draws where events go — sources, transforms,
   sinks — with named outputs such as a route's branches or a remap's `dropped`
-  on their arrows. Hover a component to light up every path through it; click
-  it to go to it in the config. Problems are marked where they are: an input
-  naming nothing, a wildcard matching nothing, a component nobody reads, a
-  loop. The graph redraws as you edit, and exports as Markdown with a Mermaid
-  diagram to commit next to the config.
+  on their arrows. Hover a component to light up every path through it.
+  Problems are marked where they are: an input naming nothing, a wildcard
+  matching nothing, a router read by its bare name, a component nobody reads,
+  a loop. The graph redraws as you edit, and exports as Markdown with a
+  Mermaid diagram to commit next to the config.
+
+  Built for pipelines too big to read at a glance: the wheel scrolls and
+  Ctrl+wheel zooms; `Ctrl+F` finds a component by name, type or file and
+  jumps to it; clicking one keeps its paths lit and shows where it is
+  declared, with **Show only its paths** to redraw just what reaches it and
+  what it reaches. Zoomed out, boxes show only their names, large enough to
+  read, and a minimap shows where the view is. Double-click a component to
+  open it in the config.
 
   A pipeline split across several files is drawn whole. By default every
   YAML or TOML file in the workspace that declares `sources`, `transforms`,

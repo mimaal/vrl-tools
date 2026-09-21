@@ -4,9 +4,17 @@
  *
  * Everything that is a decision about the graph — which component feeds
  * which, through which output, what is wrong, which column and row each one
- * belongs in — arrives already made, from the wasm module's topology reader
- * (`crates/vector-topology`). This file turns that into pixels, and handles
- * the pointer. It owns no knowledge of Vector.
+ * belongs in, which part of a large pipeline to narrow to — arrives already
+ * made, from the wasm module's topology reader (`crates/vector-topology`).
+ * This file turns that into pixels and handles the pointer and the keyboard.
+ * It owns no knowledge of Vector.
+ *
+ * A pipeline of a few components is read at a glance. One of forty is not,
+ * and most of what is here is for that case: a search that jumps to a
+ * component, a selection that keeps one component's paths lit and says where
+ * it is declared, a "show only its paths" that redraws just those, an
+ * overview mode that trades detail for legible names when zoomed out, and a
+ * minimap for knowing where the view is.
  *
  * Plain JavaScript, loaded as-is by the webview: the extension has no bundler,
  * and a drawing script of this size does not justify adding one.
@@ -23,29 +31,75 @@
   const COL_GAP = 120;
   const ROW_GAP = 26;
   /** The height a lane takes in a column: an arrow passing between boxes. */
-  const LANE_H = 8;
+  const LANE_H = 4;
+  /** The gap between two lanes, which only need to stay apart as lines. */
+  const LANE_GAP = 6;
   const PAD = 48;
-  const MIN_ZOOM = 0.2;
+  const MIN_ZOOM = 0.1;
   const MAX_ZOOM = 3;
+  /** Below this zoom the boxes' small print is unreadable, so it is swapped for big names. */
+  const OVERVIEW_BELOW = 0.6;
+  /** The zoom a search result is brought to, if the view is further out than that. */
+  const READABLE = 0.9;
 
   const svg = /** @type {SVGSVGElement} */ (document.querySelector('#canvas'));
   const viewport = /** @type {SVGGElement} */ (document.querySelector('#viewport'));
   const edgeLayer = /** @type {SVGGElement} */ (document.querySelector('#edges'));
   const labelLayer = /** @type {SVGGElement} */ (document.querySelector('#labels'));
   const nodeLayer = /** @type {SVGGElement} */ (document.querySelector('#nodes'));
+  const minimap = /** @type {SVGSVGElement} */ (document.querySelector('#minimap'));
   const title = /** @type {HTMLElement} */ (document.getElementById('title'));
   const summary = /** @type {HTMLElement} */ (document.getElementById('summary'));
   const banner = /** @type {HTMLElement} */ (document.getElementById('banner'));
   const empty = /** @type {HTMLElement} */ (document.getElementById('empty'));
   const problems = /** @type {HTMLElement} */ (document.getElementById('problems'));
   const problemList = /** @type {HTMLElement} */ (document.getElementById('problem-list'));
+  const search = /** @type {HTMLInputElement} */ (document.getElementById('search'));
+  const matchCount = /** @type {HTMLElement} */ (document.getElementById('match-count'));
+  const focusPill = /** @type {HTMLElement} */ (document.getElementById('focus-pill'));
+  const focusName = /** @type {HTMLElement} */ (document.getElementById('focus-name'));
+  const details = /** @type {HTMLElement} */ (document.getElementById('details'));
 
   /** @typedef {{edge: any, group: SVGGElement, label?: SVGGElement}} Drawn */
+  /** @typedef {{x: number, y: number, component: any}} Placed */
 
   /** The pan and zoom, applied to `viewport`. */
   const view = { x: 0, y: 0, k: 1 };
   /** Whether the person has panned or zoomed; until then a resize refits. */
   let moved = false;
+
+  /**
+   * What is on screen, kept for the interactions that come after drawing.
+   * @type {{
+   *   components: any[], edges: any[], findings: any[],
+   *   at: Map<string, Placed>, groups: Map<string, SVGGElement>, drawn: Drawn[],
+   *   findingsOf: Map<string, any[]>, focus: string | null,
+   * }}
+   */
+  let current = {
+    components: [],
+    edges: [],
+    findings: [],
+    at: new Map(),
+    groups: new Map(),
+    drawn: [],
+    findingsOf: new Map(),
+    focus: null,
+  };
+  /** The component clicked, whose paths stay lit until something else is. */
+  /** @type {string | null} */
+  let selected = null;
+  /** The components the search matches, in reading order, and which one Enter went to last. */
+  /** @type {string[]} */
+  let matches = [];
+  let matchIndex = -1;
+
+  /**
+   * The files the pipeline on screen was read from. A component's or a
+   * finding's `file` is an index into this.
+   * @type {string[]}
+   */
+  let files = [];
 
   // ---------------------------------------------------------------- helpers
 
@@ -121,18 +175,11 @@
     }
   }
 
-  /** A key for two component IDs, which can hold any character but NUL. */
+  /** A key for two component IDs, unambiguous whatever characters they hold. */
   /** @param {string} from @param {string} to */
   function pair(from, to) {
-    return `${from}\u0000${to}`;
+    return JSON.stringify([from, to]);
   }
-
-  /**
-   * The files the pipeline on screen was read from. A component's or a
-   * finding's `file` is an index into this.
-   * @type {string[]}
-   */
-  let files = [];
 
   /** Where something is, for a reader: the file only when there are several. */
   /** @param {number} file @param {any} range */
@@ -146,6 +193,12 @@
     vscode.postMessage({ type: 'reveal', range, file });
   }
 
+  /** Asks for the graph narrowed to the paths through `id`, or for all of it. */
+  /** @param {string | null} id */
+  function focusOn(id) {
+    vscode.postMessage({ type: 'focus', id });
+  }
+
   // -------------------------------------------------------------- rendering
 
   /** @param {any} analysis */
@@ -153,7 +206,6 @@
     edgeLayer.replaceChildren();
     labelLayer.replaceChildren();
     nodeLayer.replaceChildren();
-    svg.classList.remove('tracing');
 
     const components = /** @type {any[]} */ (analysis.components);
     const edges = /** @type {any[]} */ (analysis.edges);
@@ -163,69 +215,11 @@
 
     renderSummary(components, edges);
     renderProblems(findings);
+    renderFocus(analysis.focus ?? null);
     empty.classList.toggle('visible', components.length === 0);
-    if (components.length === 0) {
-      return;
-    }
 
-    // Each column is a stack of boxes and lanes in the layout's row order. A
-    // lane is only as tall as the arrow passing through it. Columns are then
-    // centred on the tallest, so a pipeline that fans out and back in reads
-    // as a shape rather than a staircase.
-    /** @type {Map<number, {row: number, height: number, key: string}[]>} */
-    const stacks = new Map();
-    const stack = (/** @type {number} */ column, /** @type {any} */ item) =>
-      stacks.set(column, [...(stacks.get(column) ?? []), item]);
-    for (const place of layout.components) {
-      stack(place.column, { row: place.row, height: NODE_H, key: `c${place.component}` });
-    }
-    for (const route of layout.routes) {
-      for (const slot of route.via) {
-        stack(slot.column, { row: slot.row, height: LANE_H, key: `l${slot.column}:${slot.row}` });
-      }
-    }
-
-    /** @type {Map<string, number>} the top of every box and lane in its column */
-    const top = new Map();
-    /** @type {Map<number, number>} */
-    const heights = new Map();
-    let tallest = 0;
-    for (const [column, items] of stacks) {
-      items.sort((a, b) => a.row - b.row);
-      let y = 0;
-      for (const item of items) {
-        top.set(item.key, y);
-        y += item.height + ROW_GAP;
-      }
-      heights.set(column, y - ROW_GAP);
-      tallest = Math.max(tallest, y - ROW_GAP);
-    }
-    const columnX = (/** @type {number} */ column) => PAD + column * (NODE_W + COL_GAP);
-    const shift = (/** @type {number} */ column) =>
-      PAD + (tallest - (heights.get(column) ?? 0)) / 2;
-
-    /** @type {Map<string, {x: number, y: number, component: any}>} */
-    const at = new Map();
-    for (const place of layout.components) {
-      const component = components[place.component];
-      at.set(component.id, {
-        x: columnX(place.column),
-        y: shift(place.column) + (top.get(`c${place.component}`) ?? 0),
-        component,
-      });
-    }
-
-    /** @type {Map<string, {x: number, y: number}[]>} lane centres, per pair of components */
-    const lanes = new Map();
-    for (const route of layout.routes) {
-      lanes.set(
-        pair(components[route.from].id, components[route.to].id),
-        route.via.map((/** @type {any} */ slot) => ({
-          x: columnX(slot.column),
-          y: shift(slot.column) + (top.get(`l${slot.column}:${slot.row}`) ?? 0) + LANE_H / 2,
-        })),
-      );
-    }
+    const at = place(components, layout);
+    const lanes = laneCentres(components, layout);
 
     // A finding points at a place in the config: the component's name, or
     // one of its inputs. Either way it belongs to that component's box.
@@ -245,12 +239,115 @@
     }
 
     const drawn = drawEdges(edges, at, lanes);
-    drawNodes(at, findingsOf, edges, drawn);
+    const groups = drawNodes(at, findingsOf);
+
+    current = { components, edges, findings, at, groups, drawn, findingsOf, focus: analysis.focus ?? null };
+
+    // What the person was doing survives a redraw while they edit: the
+    // selection if the component still exists, the search as typed.
+    if (selected && !at.has(selected)) {
+      selected = null;
+    }
+    applySearch(false);
+    showSelection();
+    drawMinimap();
+  }
+
+  /**
+   * Pixel positions from the layout's columns and rows.
+   *
+   * Each column is a stack of boxes and lanes in the layout's row order. A
+   * lane is only as tall as the arrow passing through it, and two lanes next
+   * to each other sit close, so a bundle of long arrows takes the room of a
+   * bundle of lines rather than of as many boxes. Columns are then centred on
+   * the tallest, so a pipeline that fans out and back in reads as a shape
+   * rather than a staircase.
+   *
+   * @param {any[]} components
+   * @param {{components: any[], routes: any[]}} layout
+   * @returns {Map<string, Placed>}
+   */
+  function place(components, layout) {
+    const { top, shift } = stacks(layout);
+    /** @type {Map<string, Placed>} */
+    const at = new Map();
+    for (const placement of layout.components) {
+      const component = components[placement.component];
+      at.set(component.id, {
+        x: columnX(placement.column),
+        y: shift(placement.column) + (top.get(`c${placement.component}`) ?? 0),
+        component,
+      });
+    }
+    return at;
+  }
+
+  /**
+   * @param {any[]} components
+   * @param {{components: any[], routes: any[]}} layout
+   * @returns {Map<string, {x: number, y: number}[]>} lane centres per pair of components
+   */
+  function laneCentres(components, layout) {
+    const { top, shift } = stacks(layout);
+    const lanes = new Map();
+    for (const route of layout.routes) {
+      lanes.set(
+        pair(components[route.from].id, components[route.to].id),
+        route.via.map((/** @type {any} */ slot) => ({
+          x: columnX(slot.column),
+          y: shift(slot.column) + (top.get(`l${slot.column}:${slot.row}`) ?? 0) + LANE_H / 2,
+        })),
+      );
+    }
+    return lanes;
+  }
+
+  /** @param {{components: any[], routes: any[]}} layout */
+  function stacks(layout) {
+    /** @type {Map<number, {row: number, height: number, lane: boolean, key: string}[]>} */
+    const columns = new Map();
+    const add = (/** @type {number} */ column, /** @type {any} */ item) =>
+      columns.set(column, [...(columns.get(column) ?? []), item]);
+    for (const p of layout.components) {
+      add(p.column, { row: p.row, height: NODE_H, lane: false, key: `c${p.component}` });
+    }
+    for (const route of layout.routes) {
+      for (const slot of route.via) {
+        add(slot.column, { row: slot.row, height: LANE_H, lane: true, key: `l${slot.column}:${slot.row}` });
+      }
+    }
+
+    /** @type {Map<string, number>} */
+    const top = new Map();
+    /** @type {Map<number, number>} */
+    const heights = new Map();
+    let tallest = 0;
+    for (const [column, items] of columns) {
+      items.sort((a, b) => a.row - b.row);
+      let y = 0;
+      items.forEach((item, index) => {
+        const previous = items[index - 1];
+        if (previous) {
+          y += previous.lane && item.lane ? LANE_GAP : ROW_GAP;
+        }
+        top.set(item.key, y);
+        y += item.height;
+      });
+      heights.set(column, y);
+      tallest = Math.max(tallest, y);
+    }
+    const shift = (/** @type {number} */ column) => PAD + (tallest - (heights.get(column) ?? 0)) / 2;
+    return { top, shift };
+  }
+
+  /** @param {number} column */
+  function columnX(column) {
+    return PAD + column * (NODE_W + COL_GAP);
   }
 
   /**
    * @param {any[]} edges
-   * @param {Map<string, {x: number, y: number, component: any}>} at
+   * @param {Map<string, Placed>} at
    * @param {Map<string, {x: number, y: number}[]>} lanes
    * @returns {Drawn[]}
    */
@@ -283,6 +380,7 @@
       return top + NODE_H / 2 - span / 2 + (n > 1 ? (index * span) / (n - 1) : 0);
     };
 
+    /** @type {Drawn[]} */
     const drawn = [];
     for (const edge of edges) {
       const from = at.get(edge.from);
@@ -322,11 +420,7 @@
         el('g', { class: backwards ? 'edge backwards' : 'edge' }, edgeLayer)
       );
       const path = /** @type {SVGPathElement} */ (
-        el(
-          'path',
-          { d, 'marker-end': backwards ? 'url(#arrow-error)' : 'url(#arrow)' },
-          group,
-        )
+        el('path', { d, 'marker-end': backwards ? 'url(#arrow-error)' : 'url(#arrow)' }, group)
       );
 
       /** @type {SVGGElement | undefined} */
@@ -412,12 +506,11 @@
   }
 
   /**
-   * @param {Map<string, {x: number, y: number, component: any}>} at
+   * @param {Map<string, Placed>} at
    * @param {Map<string, any[]>} findingsOf
-   * @param {any[]} edges
-   * @param {Drawn[]} drawn
+   * @returns {Map<string, SVGGElement>}
    */
-  function drawNodes(at, findingsOf, edges, drawn) {
+  function drawNodes(at, findingsOf) {
     /** @type {Map<string, SVGGElement>} */
     const groups = new Map();
 
@@ -450,21 +543,29 @@
         `${id} (${component.type || 'no type'})`,
         ...(files.length > 1 ? [where(component.file, component.range)] : []),
         ...own.map((f) => `${f.severity}: ${f.message.replaceAll('`', '')}`),
+        'Click to select, double-click to open in the config',
       ].join('\n');
 
       el('rect', { class: 'card', width: NODE_W, height: NODE_H, rx: 8, ry: 8 }, group);
       el('rect', { class: 'accent', x: 9, y: 12, width: 3, height: NODE_H - 24, rx: 1.5 }, group);
 
-      const role = el('text', { class: 'role', x: 22, y: 20 }, group);
+      const role = el('text', { class: 'role detail', x: 22, y: 20 }, group);
       role.textContent = component.role;
 
-      const name = /** @type {SVGTextElement} */ (el('text', { class: 'id', x: 22, y: 38 }, group));
+      const name = /** @type {SVGTextElement} */ (el('text', { class: 'id detail', x: 22, y: 38 }, group));
       fitText(name, id, NODE_W - 36);
 
-      const type = /** @type {SVGTextElement} */ (el('text', { class: 'type', x: 22, y: 53 }, group));
+      const type = /** @type {SVGTextElement} */ (el('text', { class: 'type detail', x: 22, y: 53 }, group));
       // With several files, the one declaring it, where the type has room.
       const declared = files.length > 1 ? ` · ${(files[component.file] ?? '').split('/').pop()}` : '';
       fitText(type, `${component.type || '(no type)'}${declared}`, NODE_W - 36);
+
+      // The overview's name: one line, big enough to read from far out. It is
+      // hidden by visibility rather than display, so it can be measured now.
+      const big = /** @type {SVGTextElement} */ (
+        el('text', { class: 'id-big', x: 22, y: NODE_H / 2, 'dominant-baseline': 'central' }, group)
+      );
+      fitText(big, id, NODE_W - 32);
 
       if (own.length > 0) {
         const badge = el('g', { class: `badge ${errors > 0 ? 'error' : 'warning'}` }, group);
@@ -477,38 +578,44 @@
         number.textContent = String(own.length);
       }
 
-      group.addEventListener('click', () => reveal(component.range, component.file));
+      group.addEventListener('click', (event) => {
+        event.stopPropagation();
+        select(selected === id ? null : id);
+      });
+      group.addEventListener('dblclick', (event) => {
+        event.stopPropagation();
+        reveal(component.range, component.file);
+      });
       group.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
+        if (event.key === 'Enter') {
           event.preventDefault();
           reveal(component.range, component.file);
+        } else if (event.key === ' ') {
+          event.preventDefault();
+          select(selected === id ? null : id);
         }
       });
-      group.addEventListener('mouseenter', () => trace(id, edges, groups, drawn));
-      group.addEventListener('focus', () => trace(id, edges, groups, drawn));
-      group.addEventListener('mouseleave', untrace);
-      group.addEventListener('blur', untrace);
+      group.addEventListener('mouseenter', () => trace(id));
+      group.addEventListener('mouseleave', () => trace(selected));
     }
+    return groups;
   }
 
+  // ------------------------------------------------------ paths and selection
+
   /**
-   * Lights up every path events can take through `id`: what can reach it,
-   * and what it can reach.
-   *
+   * Everything that can reach `id`, and everything it can reach.
    * @param {string} id
-   * @param {any[]} edges
-   * @param {Map<string, SVGGElement>} groups
-   * @param {Drawn[]} drawn
    */
-  function trace(id, edges, groups, drawn) {
+  function reach(id) {
     /** @param {(e: any) => string} near @param {(e: any) => string} far */
     const walk = (near, far) => {
       const seen = new Set([id]);
       const queue = [id];
       while (queue.length > 0) {
-        const current = queue.shift();
-        for (const edge of edges) {
-          if (near(edge) === current && !seen.has(far(edge))) {
+        const at = queue.shift();
+        for (const edge of current.edges) {
+          if (near(edge) === at && !seen.has(far(edge))) {
             seen.add(far(edge));
             queue.push(far(edge));
           }
@@ -516,38 +623,181 @@
       }
       return seen;
     };
-    const upstream = walk((e) => e.to, (e) => e.from);
-    const downstream = walk((e) => e.from, (e) => e.to);
+    return {
+      upstream: walk((e) => e.to, (e) => e.from),
+      downstream: walk((e) => e.from, (e) => e.to),
+    };
+  }
 
-    for (const [other, group] of groups) {
-      group.classList.toggle('on-path', upstream.has(other) || downstream.has(other));
+  /**
+   * Lights up every path events can take through `id`, or nothing.
+   * @param {string | null} id
+   */
+  function trace(id) {
+    if (!id || !current.groups.has(id)) {
+      svg.classList.remove('tracing');
+      for (const group of current.groups.values()) group.classList.remove('on-path', 'selected');
+      for (const { group, label } of current.drawn) {
+        group.classList.remove('on-path');
+        label?.classList.remove('on-path');
+        if (!group.classList.contains('backwards')) {
+          group.querySelector('path')?.setAttribute('marker-end', 'url(#arrow)');
+        }
+      }
+      return;
     }
-    for (const { edge, group, label } of drawn) {
+
+    const { upstream, downstream } = reach(id);
+    for (const [other, group] of current.groups) {
+      group.classList.toggle('on-path', upstream.has(other) || downstream.has(other));
+      group.classList.toggle('selected', other === selected);
+    }
+    for (const { edge, group, label } of current.drawn) {
       const onPath =
         (upstream.has(edge.from) && upstream.has(edge.to)) ||
         (downstream.has(edge.from) && downstream.has(edge.to));
       group.classList.toggle('on-path', onPath);
       label?.classList.toggle('on-path', onPath);
-      group
-        .querySelector('path')
-        ?.setAttribute(
-          'marker-end',
-          group.classList.contains('backwards')
-            ? 'url(#arrow-error)'
-            : onPath
-              ? 'url(#arrow-active)'
-              : 'url(#arrow)',
-        );
+      if (!group.classList.contains('backwards')) {
+        group.querySelector('path')?.setAttribute('marker-end', onPath ? 'url(#arrow-active)' : 'url(#arrow)');
+      }
     }
     svg.classList.add('tracing');
   }
 
-  function untrace() {
-    svg.classList.remove('tracing');
-    for (const path of edgeLayer.querySelectorAll('.edge:not(.backwards) path')) {
-      path.setAttribute('marker-end', 'url(#arrow)');
+  /** @param {string | null} id */
+  function select(id) {
+    selected = id;
+    showSelection();
+  }
+
+  /** Keeps the selection's paths lit and fills in the details bar. */
+  function showSelection() {
+    trace(selected);
+    details.replaceChildren();
+    const placed = selected ? current.at.get(selected) : undefined;
+    details.classList.toggle('visible', Boolean(placed));
+    if (!placed || !selected) {
+      return;
+    }
+
+    const component = placed.component;
+    const { upstream, downstream } = reach(selected);
+    const own = current.findingsOf.get(selected) ?? [];
+
+    const role = document.createElement('span');
+    role.className = `chip ${component.role}`;
+    role.textContent = component.role;
+
+    const name = document.createElement('strong');
+    name.textContent = selected;
+
+    const type = document.createElement('code');
+    type.textContent = component.type || '(no type)';
+
+    const place = document.createElement('span');
+    place.className = 'muted';
+    place.textContent = files.length > 1 ? where(component.file, component.range) : `line ${component.range.start.line + 1}`;
+
+    const flow = document.createElement('span');
+    flow.className = 'muted';
+    flow.textContent = `${count(upstream.size - 1, 'component', 'components')} upstream · ${downstream.size - 1} downstream`;
+
+    details.append(role, name, type, place, flow);
+
+    if (own.length > 0) {
+      const issues = document.createElement('span');
+      issues.className = `issues ${own.some((f) => f.severity === 'error') ? 'error' : 'warning'}`;
+      issues.textContent = count(own.length, 'problem', 'problems');
+      details.append(issues);
+    }
+
+    const spacer = document.createElement('span');
+    spacer.className = 'spacer';
+    details.append(spacer);
+
+    const open = document.createElement('button');
+    open.textContent = 'Open in config';
+    open.title = 'Go to where it is declared (double-click the box does the same)';
+    open.addEventListener('click', () => reveal(component.range, component.file));
+    details.append(open);
+
+    const narrow = document.createElement('button');
+    if (current.focus === selected) {
+      narrow.textContent = 'Show whole pipeline';
+      narrow.addEventListener('click', () => focusOn(null));
+    } else {
+      narrow.textContent = 'Show only its paths';
+      narrow.title = 'Redraw just what reaches it and what it reaches (F)';
+      narrow.addEventListener('click', () => focusOn(selected));
+    }
+    details.append(narrow);
+  }
+
+  /** @param {string | null} focus */
+  function renderFocus(focus) {
+    focusPill.classList.toggle('visible', Boolean(focus));
+    focusName.textContent = focus ?? '';
+  }
+
+  // ------------------------------------------------------------------ search
+
+  /**
+   * Marks the components matching the search box: by name, type or file.
+   * @param {boolean} jump whether to go to the first match
+   */
+  function applySearch(jump) {
+    const query = search.value.trim().toLowerCase();
+    svg.classList.toggle('searching', query !== '');
+    matches = [];
+    for (const [id, group] of current.groups) {
+      const component = current.at.get(id)?.component;
+      const hit =
+        query !== '' &&
+        [id, component?.type ?? '', files[component?.file] ?? ''].some((text) =>
+          text.toLowerCase().includes(query),
+        );
+      group.classList.toggle('match', hit);
+      if (hit) matches.push(id);
+    }
+    // Reading order: left to right, then top to bottom.
+    matches.sort((a, b) => {
+      const pa = current.at.get(a);
+      const pb = current.at.get(b);
+      return (pa?.x ?? 0) - (pb?.x ?? 0) || (pa?.y ?? 0) - (pb?.y ?? 0);
+    });
+    matchCount.textContent =
+      query === '' ? '' : matches.length === 0 ? 'no match' : count(matches.length, 'match', 'matches');
+    matchIndex = -1;
+    if (jump && matches.length > 0) {
+      next(1);
     }
   }
+
+  /** Goes to the next (or previous) match, and selects it. @param {number} step */
+  function next(step) {
+    if (matches.length === 0) return;
+    matchIndex = (matchIndex + step + matches.length) % matches.length;
+    const id = matches[matchIndex];
+    select(id);
+    centreOn(id);
+    matchCount.textContent = `${matchIndex + 1} of ${matches.length}`;
+  }
+
+  search.addEventListener('input', () => applySearch(false));
+  search.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      if (matchIndex === -1) applySearch(true);
+      else next(event.shiftKey ? -1 : 1);
+    } else if (event.key === 'Escape') {
+      search.value = '';
+      applySearch(false);
+      search.blur();
+    }
+  });
+
+  // ------------------------------------------------------------ summary, list
 
   /** @param {any[]} components @param {any[]} edges */
   function renderSummary(components, edges) {
@@ -600,6 +850,9 @@
 
   function apply() {
     viewport.setAttribute('transform', `translate(${view.x} ${view.y}) scale(${view.k})`);
+    // Far out, the small print is noise and the names are what matter.
+    svg.classList.toggle('overview', view.k < OVERVIEW_BELOW);
+    updateMinimap();
   }
 
   function fit() {
@@ -608,11 +861,7 @@
     if (box.width === 0 || frame.width === 0) {
       return;
     }
-    const k = Math.min(
-      (frame.width - PAD) / box.width,
-      (frame.height - PAD) / box.height,
-      1.25,
-    );
+    const k = Math.min((frame.width - PAD) / box.width, (frame.height - PAD) / box.height, 1.25);
     view.k = Math.max(MIN_ZOOM, k);
     view.x = (frame.width - box.width * view.k) / 2 - box.x * view.k;
     view.y = (frame.height - box.height * view.k) / 2 - box.y * view.k;
@@ -620,31 +869,58 @@
     apply();
   }
 
+  /** Zooms by `factor` keeping the point (px, py) of the frame still. */
+  /** @param {number} factor @param {number} px @param {number} py */
+  function zoomAbout(factor, px, py) {
+    const k = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, view.k * factor));
+    view.x = px - ((px - view.x) * k) / view.k;
+    view.y = py - ((py - view.y) * k) / view.k;
+    view.k = k;
+    moved = true;
+    apply();
+  }
+
+  /** Brings a component to the middle of the view, readable. @param {string} id */
+  function centreOn(id) {
+    const placed = current.at.get(id);
+    if (!placed) return;
+    const frame = svg.getBoundingClientRect();
+    view.k = Math.max(view.k, READABLE);
+    view.x = frame.width / 2 - (placed.x + NODE_W / 2) * view.k;
+    view.y = frame.height / 2 - (placed.y + NODE_H / 2) * view.k;
+    moved = true;
+    apply();
+  }
+
+  // The wheel scrolls, as it does everywhere else in the editor; zooming is
+  // Ctrl (or Cmd) with the wheel, which is also what a trackpad pinch sends.
   svg.addEventListener(
     'wheel',
     (event) => {
       event.preventDefault();
-      const frame = svg.getBoundingClientRect();
-      const px = event.clientX - frame.left;
-      const py = event.clientY - frame.top;
-      const k = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, view.k * Math.exp(-event.deltaY * 0.0015)));
-      // Zoom about the pointer, so what is under it stays under it.
-      view.x = px - ((px - view.x) * k) / view.k;
-      view.y = py - ((py - view.y) * k) / view.k;
-      view.k = k;
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? svg.clientHeight : 1;
+      if (event.ctrlKey || event.metaKey) {
+        const frame = svg.getBoundingClientRect();
+        zoomAbout(Math.exp(-event.deltaY * unit * 0.0025), event.clientX - frame.left, event.clientY - frame.top);
+        return;
+      }
+      const dx = event.shiftKey && event.deltaX === 0 ? event.deltaY : event.deltaX;
+      const dy = event.shiftKey && event.deltaX === 0 ? 0 : event.deltaY;
+      view.x -= dx * unit;
+      view.y -= dy * unit;
       moved = true;
       apply();
     },
     { passive: false },
   );
 
-  /** @type {{x: number, y: number} | undefined} */
+  /** @type {{x: number, y: number, startX: number, startY: number} | undefined} */
   let grab;
   svg.addEventListener('pointerdown', (event) => {
     if (event.button !== 0 || /** @type {Element} */ (event.target).closest('.node')) {
       return;
     }
-    grab = { x: event.clientX - view.x, y: event.clientY - view.y };
+    grab = { x: event.clientX - view.x, y: event.clientY - view.y, startX: event.clientX, startY: event.clientY };
     svg.setPointerCapture(event.pointerId);
     svg.classList.add('panning');
   });
@@ -655,20 +931,158 @@
     moved = true;
     apply();
   });
-  const release = () => {
+  svg.addEventListener('pointerup', (event) => {
+    // A click on empty canvas, not the end of a drag, clears the selection.
+    if (grab && Math.hypot(event.clientX - grab.startX, event.clientY - grab.startY) < 4) {
+      select(null);
+    }
     grab = undefined;
     svg.classList.remove('panning');
-  };
-  svg.addEventListener('pointerup', release);
-  svg.addEventListener('pointercancel', release);
+  });
+  svg.addEventListener('pointercancel', () => {
+    grab = undefined;
+    svg.classList.remove('panning');
+  });
 
   new ResizeObserver(() => {
     if (!moved) fit();
+    else updateMinimap();
   }).observe(svg);
 
   document.getElementById('fit')?.addEventListener('click', fit);
   document.getElementById('export')?.addEventListener('click', () => {
     vscode.postMessage({ type: 'export' });
+  });
+  document.getElementById('unfocus')?.addEventListener('click', () => focusOn(null));
+
+  // The keyboard, for everything the pointer does. Keys typed into the search
+  // box are the search box's.
+  document.addEventListener('keydown', (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+      event.preventDefault();
+      search.focus();
+      search.select();
+      return;
+    }
+    if (event.target === search) return;
+
+    const frame = svg.getBoundingClientRect();
+    const step = 80;
+    switch (event.key) {
+      case '+':
+      case '=':
+        zoomAbout(1.25, frame.width / 2, frame.height / 2);
+        break;
+      case '-':
+      case '_':
+        zoomAbout(0.8, frame.width / 2, frame.height / 2);
+        break;
+      case '0':
+        fit();
+        break;
+      case 'ArrowLeft':
+        view.x += step;
+        break;
+      case 'ArrowRight':
+        view.x -= step;
+        break;
+      case 'ArrowUp':
+        view.y += step;
+        break;
+      case 'ArrowDown':
+        view.y -= step;
+        break;
+      case 'f':
+      case 'F':
+        if (selected) focusOn(current.focus === selected ? null : selected);
+        return;
+      case 'Escape':
+        if (selected) select(null);
+        else if (current.focus) focusOn(null);
+        return;
+      default:
+        return;
+    }
+    if (event.key.startsWith('Arrow')) {
+      event.preventDefault();
+      moved = true;
+      apply();
+    }
+  });
+
+  // ----------------------------------------------------------------- minimap
+
+  /** The content's bounds, cached per render for the minimap. */
+  /** @type {DOMRect | undefined} */
+  let bounds;
+
+  /**
+   * A small map of the whole graph with the view drawn on it. Shown only
+   * when the graph does not fit, which is when knowing where the view is
+   * becomes a question.
+   */
+  function drawMinimap() {
+    minimap.replaceChildren();
+    bounds = current.at.size > 0 ? viewport.getBBox() : undefined;
+    if (!bounds) {
+      minimap.classList.remove('visible');
+      return;
+    }
+    minimap.setAttribute('viewBox', `${bounds.x - 20} ${bounds.y - 20} ${bounds.width + 40} ${bounds.height + 40}`);
+    for (const [id, placed] of current.at) {
+      el(
+        'rect',
+        {
+          class: `mini-node ${placed.component.role}${id === selected ? ' selected' : ''}`,
+          x: placed.x,
+          y: placed.y,
+          width: NODE_W,
+          height: NODE_H,
+          rx: 10,
+        },
+        minimap,
+      );
+    }
+    el('rect', { id: 'mini-view', x: 0, y: 0, width: 0, height: 0 }, minimap);
+    updateMinimap();
+  }
+
+  function updateMinimap() {
+    const rect = minimap.querySelector('#mini-view');
+    if (!bounds || !rect) return;
+    const frame = svg.getBoundingClientRect();
+    const x = -view.x / view.k;
+    const y = -view.y / view.k;
+    const w = frame.width / view.k;
+    const h = frame.height / view.k;
+    rect.setAttribute('x', String(x));
+    rect.setAttribute('y', String(y));
+    rect.setAttribute('width', String(w));
+    rect.setAttribute('height', String(h));
+    const fits =
+      x <= bounds.x && y <= bounds.y && x + w >= bounds.x + bounds.width && y + h >= bounds.y + bounds.height;
+    minimap.classList.toggle('visible', !fits);
+  }
+
+  /** Moves the view so the minimap point under the pointer is its centre. */
+  /** @param {PointerEvent} event */
+  function panFromMinimap(event) {
+    const matrix = minimap.getScreenCTM();
+    if (!matrix) return;
+    const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix.inverse());
+    const frame = svg.getBoundingClientRect();
+    view.x = frame.width / 2 - point.x * view.k;
+    view.y = frame.height / 2 - point.y * view.k;
+    moved = true;
+    apply();
+  }
+  minimap.addEventListener('pointerdown', (event) => {
+    event.stopPropagation();
+    minimap.setPointerCapture(event.pointerId);
+    panFromMinimap(event);
+  });
+  minimap.addEventListener('pointermove', (event) => {
+    if (minimap.hasPointerCapture(event.pointerId)) panFromMinimap(event);
   });
 
   // --------------------------------------------------------------- messages
@@ -686,8 +1100,8 @@
         banner.classList.remove('visible');
       }
       render(message.analysis);
-      // Edits keep the view where the person left it; a different config
-      // starts framed.
+      // Edits keep the view where the person left it; a different config, or
+      // narrowing to one component's paths, starts framed.
       if (message.refit || !moved) {
         fit();
       }

@@ -1,0 +1,53 @@
+# Routers, and the wildcards that pick their outputs. Synthetic, public config
+# format only.
+#
+# A `route` has an output per route plus `_unmatched`; an `exclusive_route`
+# declares its routes as a list and always has `_unmatched`. Neither has a
+# default output. Vector matches an input pattern against outputs written as
+# `id` or `id.port`, so `*_route.errors` takes the `errors` output of every
+# router whose name ends in `_route`.
+
+[sources.nginx_logs]
+type = "file"
+include = ["/var/log/nginx/*.log"]
+
+[sources.api_logs]
+type = "file"
+include = ["/var/log/api/*.log"]
+
+[transforms.nginx_route]
+type = "route"
+inputs = ["nginx_logs"]
+route.errors = '.status >= 500'
+
+[transforms.api_route]
+type = "route"
+inputs = ["api_logs"]
+route.errors = '.level == "error"'
+
+[transforms.by_tier]
+type = "exclusive_route"
+inputs = ["*_route._unmatched"]
+
+[[transforms.by_tier.routes]]
+name = "gold"
+condition = '.tier == "gold"'
+
+[[transforms.by_tier.routes]]
+name = "rest"
+condition = 'true'
+
+[sinks.alerts]
+type = "console"
+inputs = ["*_route.errors"]
+encoding.codec = "json"
+
+[sinks.gold]
+type = "console"
+inputs = ["by_tier.gold"]
+encoding.codec = "json"
+
+[sinks.other]
+type = "console"
+inputs = ["by_tier.rest", "by_tier._unmatched"]
+encoding.codec = "json"

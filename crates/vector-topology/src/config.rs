@@ -70,6 +70,9 @@ pub struct Component {
     /// The outputs this component offers besides its default one. See
     /// [`crate::outputs`].
     pub named_outputs: Vec<String>,
+    /// Whether an input can name the component itself. `false` for a router,
+    /// whose events all leave by named outputs. See [`crate::outputs`].
+    pub default_output: bool,
     /// Which of the files being read declares it, as an index into the list
     /// the caller gave. `range` and every input's range are in that file.
     /// Always 0 when a single file is read.
@@ -114,6 +117,7 @@ pub fn read_yaml(source: &str) -> Result<Vec<Component>, ConfigError> {
         for (key, body) in entries {
             let Some(id) = key.data.as_str() else { continue };
 
+            let outputs = yaml_outputs(body);
             components.push(Component {
                 id: id.to_owned(),
                 role,
@@ -125,7 +129,8 @@ pub fn read_yaml(source: &str) -> Result<Vec<Component>, ConfigError> {
                     .to_owned(),
                 inputs: yaml_inputs(body, &index),
                 range: yaml_range(key, &index),
-                named_outputs: yaml_named_outputs(body),
+                named_outputs: outputs.named,
+                default_output: outputs.default,
                 file: 0,
             });
         }
@@ -165,7 +170,7 @@ fn yaml_inputs(body: &MarkedYaml<'_>, index: &LineIndex<'_>) -> Vec<Input> {
     })
 }
 
-fn yaml_named_outputs(body: &MarkedYaml<'_>) -> Vec<String> {
+fn yaml_outputs(body: &MarkedYaml<'_>) -> outputs::Outputs {
     let routes = body.data.as_mapping_get("route").and_then(|node| {
         node.data.as_mapping().map(|entries| {
             entries
@@ -175,8 +180,25 @@ fn yaml_named_outputs(body: &MarkedYaml<'_>) -> Vec<String> {
         })
     });
 
+    // `exclusive_route`: a list of `{name, condition}`.
+    let exclusive = body.data.as_mapping_get("routes").and_then(|node| {
+        node.data.as_sequence().map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| {
+                    entry
+                        .data
+                        .as_mapping_get("name")
+                        .and_then(|name| name.data.as_str())
+                        .map(ToOwned::to_owned)
+                })
+                .collect::<Vec<_>>()
+        })
+    });
+
     outputs::declared(
         routes,
+        exclusive,
         yaml_flag(body, "reroute_dropped", false),
         yaml_flag(body, "reroute_unmatched", true),
     )
@@ -221,6 +243,7 @@ pub fn read_toml(source: &str) -> Result<Vec<Component>, ConfigError> {
                 continue;
             };
 
+            let outputs = toml_outputs(table);
             components.push(Component {
                 id: id.to_owned(),
                 role,
@@ -234,7 +257,8 @@ pub fn read_toml(source: &str) -> Result<Vec<Component>, ConfigError> {
                     .key(id)
                     .and_then(toml_edit::Key::span)
                     .map_or_else(Range::default, |span| index.range(span)),
-                named_outputs: toml_named_outputs(table),
+                named_outputs: outputs.named,
+                default_output: outputs.default,
                 file: 0,
             });
         }
@@ -272,7 +296,7 @@ fn toml_inputs(table: &dyn toml_edit::TableLike, index: &LineIndex<'_>) -> Vec<I
     })
 }
 
-fn toml_named_outputs(table: &dyn toml_edit::TableLike) -> Vec<String> {
+fn toml_outputs(table: &dyn toml_edit::TableLike) -> outputs::Outputs {
     let routes = table
         .get("route")
         .and_then(toml_edit::Item::as_table_like)
@@ -283,8 +307,30 @@ fn toml_named_outputs(table: &dyn toml_edit::TableLike) -> Vec<String> {
                 .collect::<Vec<_>>()
         });
 
+    // `exclusive_route`: `[[transforms.x.routes]]` tables, or an inline array
+    // of `{ name = ..., condition = ... }`.
+    let exclusive = table.get("routes").and_then(|item| {
+        let name = |entry: &dyn toml_edit::TableLike| {
+            entry
+                .get("name")
+                .and_then(toml_edit::Item::as_str)
+                .map(ToOwned::to_owned)
+        };
+        if let Some(tables) = item.as_array_of_tables() {
+            Some(tables.iter().filter_map(|t| name(t)).collect::<Vec<_>>())
+        } else {
+            item.as_array().map(|values| {
+                values
+                    .iter()
+                    .filter_map(|value| value.as_inline_table().and_then(|t| name(t)))
+                    .collect::<Vec<_>>()
+            })
+        }
+    });
+
     outputs::declared(
         routes,
+        exclusive,
         toml_flag(table, "reroute_dropped", false),
         toml_flag(table, "reroute_unmatched", true),
     )
