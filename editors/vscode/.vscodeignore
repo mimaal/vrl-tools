@@ -5,6 +5,9 @@ out/**/*.map
 syntaxes/vrl.tmLanguage.template.json
 .vscodeignore
 
+# The README's screenshot is linked from GitHub, not shipped.
+media/pipeline-graph.png
+
 # wasm-pack scaffolding: the .wasm and its loader ship, the rest does not.
 wasm/.gitignore
 wasm/package.json

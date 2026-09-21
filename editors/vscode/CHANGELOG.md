@@ -4,17 +4,26 @@ Versions before 0.5.0 were never published; they exist as tags and as `.vsix`
 files built locally. They are listed here because the history explains what the
 extension is.
 
-## Unreleased
+## 0.6.0 — 2026-09-21
 
-- **The pipeline graph has its own panel and a button to open it.** A Vector
-  config in the editor gets a graph icon in the title bar (only a config: a
-  Kubernetes manifest does not). The panel draws sources, transforms and sinks
-  in the theme's colours, with named outputs on their arrows and problems
-  marked on the component they belong to. Hovering a component lights up
-  every path events take through it; clicking one goes to it in the config.
-  It redraws as the config is edited and keeps the last good graph while the
-  file does not parse. The Markdown with a Mermaid diagram is still there, as
-  "Export Markdown", for committing next to the config.
+- **A graph of the pipeline, from the Vector config.** A config open in the
+  editor gets a graph button in the title bar (only a config: a Kubernetes
+  manifest does not). The panel draws sources, transforms and sinks in the
+  theme's colours, with named outputs — a route's branches, `_unmatched`, a
+  remap's `dropped` — on their arrows. Hovering a component lights up every
+  path events take through it; clicking one goes to it in the config. It
+  redraws as the config is edited and keeps the last good graph while the file
+  does not parse.
+- The graph is read, not guessed: every transform and sink declares its
+  `inputs`, and the work is resolving them, wildcards and dotted outputs
+  included. Nothing needs the `vector` binary.
+- **Topology problems are found while the config is written**, which `vector
+  graph` cannot do because it only runs on a config Vector accepted: an input
+  naming no component, a wildcard matching nothing, a named output the
+  component does not have, a component nobody reads, a loop. Each is marked on
+  its component and listed under the graph, one click from its line.
+- "Export Markdown" opens the same graph as a Mermaid diagram in a Markdown
+  document, to commit next to the config; GitHub renders it too.
 - The layout is computed in the wasm module: columns follow the flow, sinks
   line up on the right, and an arrow that skips columns runs in a lane between
   the boxes instead of through them.
