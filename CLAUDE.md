@@ -181,6 +181,18 @@ Free and open source. Full phased plan lives in @docs/PLAN.md.
 
 ## Working rules
 
+- **Read Vector's source, not Vector's docs, and never your memory of it.**
+  Building anything here leaves a full checkout of Vector at the pinned tag
+  under `CARGO_HOME/git/checkouts/vector-*/<commit>/`, because
+  `vector-vrl-functions` is a git dependency. It is the same code the pin is
+  against, it is on the machine already, and it answers questions the published
+  reference does not: which ports `fn outputs` really returns, what
+  `check_shape` really rejects, what a flag really defaults to. Every claim
+  this repo makes about Vector was settled that way, and the ones about the
+  graph were settled that way *after* being wrong when they were not.
+  `crates/vector-topology/tests/against_vector.rs` shows how to find the
+  checkout; the version in its `Cargo.toml` is what identifies the right one.
+
 - NEVER hand-write stdlib function lists. Generate them.
   - `scripts/gen-grammar.ts` shells out to `cargo run -p vrl-check-core --bin
     vrl-stdlib`, which walks `vrl::stdlib::all()`. That is the authoritative
@@ -224,10 +236,31 @@ Free and open source. Full phased plan lives in @docs/PLAN.md.
   valid" — and is therefore the only one the compiler cannot keep honest.
   `test:grouping` covers `editors/vscode/src/grouping.ts` for the same reason:
   no amount of compiling VRL says whether two folders are one pipeline.
+- **Test the path that finds the input, not only the path that takes it.**
+  Every topology test passed its files explicitly, so the code that decides
+  *which* files are a pipeline had no test at all — and read an entire
+  workspace as one config for three releases without anything noticing. The
+  same shape of hole exists wherever this project guesses: which files are
+  Vector's, which document a graph belongs to, which config declares a table.
+  If a function takes what it works on as an argument, ask who builds that
+  argument, and whether anything tests them.
+
 - Test the extension against the real parsers in `test-corpus/`, never against
   toy examples. That corpus is generated from the `vrl` crate's stdlib examples
   at test time, plus synthetic parsers built on public log formats.
   Never commit real-world parsers or sample logs from any third party.
+
+## Skills
+
+`.claude/skills/` holds the two procedures that are rare enough to be
+forgotten and costly enough to get wrong:
+
+- **`release`** — bump, changelog, package, tag, push. The tag has to match the
+  manifest or the workflow refuses, and `vsce` packs the working directory
+  rather than the index.
+- **`move-the-pin`** — onto a newer `vrl` crate and Vector release. Read it
+  before touching `VRL_VERSION`: the hard part is finding a *pinnable pair*,
+  not picking a number.
 
 ## Communication
 
