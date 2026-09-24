@@ -4,7 +4,7 @@ Versions before 0.5.0 were never published; they exist as tags and as `.vsix`
 files built locally. They are listed here because the history explains what the
 extension is.
 
-## Unreleased
+## 0.7.0 — 2026-09-24
 
 The graph's model of a Vector topology was checked, component by component,
 against Vector's own source at the release the `vrl` pin comes from. Six things

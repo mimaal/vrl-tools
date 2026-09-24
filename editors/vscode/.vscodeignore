@@ -8,6 +8,11 @@ syntaxes/vrl.tmLanguage.template.json
 # The README's screenshot is linked from GitHub, not shipped.
 media/pipeline-graph.png
 
+# Git Bash leaves these in the working directory. They are gitignored, but
+# vsce packs the directory rather than the index, so they need excluding here
+# too or they ship inside the .vsix.
+*.stackdump
+
 # wasm-pack scaffolding: the .wasm and its loader ship, the rest does not.
 wasm/.gitignore
 wasm/package.json
