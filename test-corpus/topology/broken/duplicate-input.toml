@@ -1,0 +1,19 @@
+# `out` names `parse_logs` twice. Vector rejects it outright ("has input
+# \"parse_logs\" duplicated 2 times"), and drawing the arrow twice would hide
+# the mistake behind a line that looks exactly like the right one.
+
+[sources.app_logs]
+type = "file"
+include = ["/var/log/app/*.log"]
+
+[transforms.parse_logs]
+type = "remap"
+inputs = ["app_logs"]
+source = '''
+.kind = "json"
+'''
+
+[sinks.out]
+type = "console"
+inputs = ["parse_logs", "parse_logs"]
+encoding.codec = "json"

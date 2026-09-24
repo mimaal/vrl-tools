@@ -23,9 +23,9 @@ fn corpus(name: &str) -> String {
 
 fn read(name: &str) -> Vec<Component> {
     if name.ends_with(".toml") {
-        read_toml(&corpus(name)).expect("the corpus parses as TOML")
+        read_toml(&corpus(name)).expect("the corpus parses as TOML").components
     } else {
-        read_yaml(&corpus(name)).expect("the corpus parses as YAML")
+        read_yaml(&corpus(name)).expect("the corpus parses as YAML").components
     }
 }
 
@@ -172,6 +172,6 @@ fn the_broken_configs_still_read() {
 
 #[test]
 fn an_empty_document_is_an_empty_config() {
-    assert!(read_yaml("").expect("empty YAML is fine").is_empty());
-    assert!(read_toml("").expect("empty TOML is fine").is_empty());
+    assert!(read_yaml("").expect("empty YAML is fine").components.is_empty());
+    assert!(read_toml("").expect("empty TOML is fine").components.is_empty());
 }

@@ -1,0 +1,16 @@
+# Events come in and are transformed, and there is nowhere for them to go.
+# Vector says "No sinks defined in the config." and refuses to start.
+
+sources:
+  app_logs:
+    type: file
+    include:
+      - /var/log/app/*.log
+
+transforms:
+  parse:
+    type: remap
+    inputs:
+      - app_logs
+    source: |-
+      .kind = "json"

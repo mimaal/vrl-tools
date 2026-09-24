@@ -1,0 +1,34 @@
+# `out` declares no `inputs` at all, and `drop_debug` declares an empty list.
+# Vector refuses to start on either ("Sink \"out\" has no inputs"), because a
+# transform or a sink with nothing feeding it can never do anything.
+#
+# The enrichment table is here to show the other side of the same rule: Vector
+# never asks a table for inputs, so one that is only read is perfectly normal.
+
+sources:
+  app_logs:
+    type: file
+    include:
+      - /var/log/app/*.log
+
+transforms:
+  drop_debug:
+    type: filter
+    inputs: []
+    condition:
+      type: vrl
+      source: '.level != "debug"'
+
+enrichment_tables:
+  hosts:
+    type: file
+    file:
+      path: /etc/vector/hosts.csv
+      encoding:
+        type: csv
+
+sinks:
+  out:
+    type: console
+    encoding:
+      codec: json

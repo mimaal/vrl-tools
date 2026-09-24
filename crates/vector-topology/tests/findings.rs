@@ -152,7 +152,7 @@ fn a_wildcard_matching_nothing_is_reported() {
     assert!(
         messages(&graph)
             .iter()
-            .any(|message| message.contains("`enrich_*` matches no source or transform")),
+            .any(|message| message.contains("`enrich_*` matches no output of any component")),
         "{:?}",
         messages(&graph),
     );
@@ -177,33 +177,213 @@ fn a_loop_is_reported_for_every_component_in_it() {
     }
 }
 
-/// Resolution stops at the first reading that works, so a component whose name
-/// contains a dot wins over splitting that name into an output.
+/// A dot in a component's name is the first thing Vector rejects
+/// (`check_names`), because a dot is how an input picks one output of a
+/// component. The name is still resolved whole — that is the order
+/// `Graph::input_map` uses — so the picture is drawn and the reason it cannot
+/// run is said out loud rather than left to Vector.
 #[test]
-fn a_dotted_component_name_is_not_read_as_an_output() {
-    let source = "
-sources:
-  app.logs:
-    type: file
-transforms:
-  parse:
-    type: remap
-    inputs:
-      - app.logs
-sinks:
-  out:
-    type: console
-    inputs:
-      - parse
-";
-    let graph = build(read_yaml(source).expect("parses"));
+fn a_dotted_component_name_is_reported_and_still_drawn() {
+    let graph = graph("broken/dotted-name.yaml");
 
-    let edge = edge(&graph, "app.logs", "parse");
+    let edge = edge(&graph, "app.logs", "out");
     assert!(
         edge.output.is_none(),
         "the dot belongs to the name, not to an output",
     );
+    assert!(
+        messages(&graph)
+            .iter()
+            .any(|message| message.contains("a component cannot be called `app.logs`")),
+        "{:?}",
+        messages(&graph),
+    );
+}
+
+/// Sources with named outputs, which no field of their own announces: only
+/// their `type` does. Getting this wrong drew the one arrow Vector rejects and
+/// refused the ones it accepts.
+#[test]
+fn a_source_with_ports_is_read_by_its_type() {
+    let graph = graph("ports.yaml");
+
+    assert_eq!(edge(&graph, "otel", "tag_logs").output.as_deref(), Some("logs"));
+    assert_eq!(edge(&graph, "otel", "traces_out").output.as_deref(), Some("traces"));
+    assert_eq!(edge(&graph, "dd", "metrics_out").output.as_deref(), Some("metrics"));
     assert!(graph.findings.is_empty(), "{:?}", messages(&graph));
+}
+
+/// `disable_llmobs` removes the output, so naming it is an error rather than a
+/// path that happens to carry nothing.
+#[test]
+fn a_disabled_port_is_not_there_to_name() {
+    let graph = inline(
+        "sources:\n  dd:\n    type: datadog_agent\n    multiple_outputs: true\n    disable_llmobs: true\n\
+         sinks:\n  out:\n    type: console\n    inputs: [dd.llmobs]\n",
+    );
+
+    assert!(
+        messages(&graph)
+            .iter()
+            .any(|message| message.contains("`dd` has no output `llmobs`")),
+        "{:?}",
+        messages(&graph),
+    );
+}
+
+/// An `opentelemetry` source has no default output, so its bare name resolves
+/// to nothing in Vector. Saying which outputs it does have is the useful part.
+#[test]
+fn a_source_without_a_default_output_cannot_be_named_bare() {
+    let graph = inline(
+        "sources:\n  otel:\n    type: opentelemetry\n\
+         sinks:\n  out:\n    type: console\n    inputs: [otel]\n",
+    );
+
+    assert!(graph.edges.is_empty(), "{:#?}", graph.edges);
+    assert!(
+        messages(&graph).iter().any(|message| {
+            message.contains("`otel` has no default output") && message.contains("`otel.logs`")
+        }),
+        "{:?}",
+        messages(&graph),
+    );
+}
+
+/// A `memory` enrichment table is a sink and, under its `source_key`, a
+/// source. Both halves are in the graph, and neither is a finding.
+#[test]
+fn an_enrichment_table_is_wired_into_the_pipeline() {
+    let graph = graph("enrichment.yaml");
+
+    edge(&graph, "app_logs", "seen");
+    assert!(edge(&graph, "seen_export", "exported").output.is_none());
+    assert_eq!(
+        edge(&graph, "seen_export", "expired_out").output.as_deref(),
+        Some("expired"),
+    );
+    assert!(graph.findings.is_empty(), "{:?}", messages(&graph));
+}
+
+/// VRL reaches a table by name. Wiring one in as an input is a different
+/// mistake from naming a sink, and worth its own sentence.
+#[test]
+fn a_table_cannot_be_read_as_an_input() {
+    let graph = inline(
+        "sources:\n  app_logs:\n    type: file\n\
+         enrichment_tables:\n  hosts:\n    type: file\n\
+         sinks:\n  out:\n    type: console\n    inputs: [hosts]\n",
+    );
+
+    assert!(
+        messages(&graph)
+            .iter()
+            .any(|message| message.contains("`hosts` is an enrichment table")),
+        "{:?}",
+        messages(&graph),
+    );
+}
+
+/// The warning is per output, not per component: something does read `split`,
+/// so it is not an orphan, but two of its three routes go nowhere.
+#[test]
+fn an_output_nobody_reads_is_a_warning_of_its_own() {
+    let graph = graph("broken/unread-route.yaml");
+
+    for output in ["split.warnings", "split._unmatched"] {
+        let finding = graph
+            .findings
+            .iter()
+            .find(|finding| finding.message.contains(&format!("nothing reads `{output}`")))
+            .unwrap_or_else(|| panic!("{output}: {:?}", messages(&graph)));
+        assert_eq!(finding.severity, Severity::Warning);
+    }
+
+    assert!(
+        !messages(&graph)
+            .iter()
+            .any(|message| message.contains("nothing reads `split.errors`")),
+        "{:?}",
+        messages(&graph),
+    );
+}
+
+/// `check_shape`: a transform or a sink with nothing feeding it stops Vector
+/// starting. A table is exempt, because Vector never asks it for inputs.
+#[test]
+fn a_transform_or_sink_without_inputs_is_an_error() {
+    let graph = graph("broken/no-inputs.yaml");
+
+    for id in ["out", "drop_debug"] {
+        assert!(
+            messages(&graph)
+                .iter()
+                .any(|message| message.contains(&format!("`{id}` has no inputs"))),
+            "{id}: {:?}",
+            messages(&graph),
+        );
+    }
+
+    assert!(
+        !messages(&graph)
+            .iter()
+            .any(|message| message.contains("`hosts` has no inputs")),
+        "a table nothing writes into is ordinary: {:?}",
+        messages(&graph),
+    );
+}
+
+/// Vector counts the repeats and refuses. The graph says so once, at the
+/// repeat, and draws one arrow rather than two identical ones on top of each
+/// other.
+#[test]
+fn an_input_named_twice_is_an_error_and_one_edge() {
+    let graph = graph("broken/duplicate-input.toml");
+
+    let repeats = messages(&graph)
+        .into_iter()
+        .filter(|message| message.contains("takes `parse_logs` more than once"))
+        .count();
+    assert_eq!(repeats, 1, "{:?}", messages(&graph));
+
+    let drawn = graph
+        .edges
+        .iter()
+        .filter(|edge| edge.from == "parse_logs" && edge.to == "out")
+        .count();
+    assert_eq!(drawn, 1, "{:#?}", graph.edges);
+}
+
+/// A pipeline events cannot leave. Vector: "No sinks defined in the config."
+#[test]
+fn a_pipeline_with_no_sinks_is_an_error() {
+    let graph = graph("broken/no-sinks.yaml");
+
+    assert!(
+        messages(&graph).iter().any(|message| message.contains("no sinks")),
+        "{:?}",
+        messages(&graph),
+    );
+}
+
+/// An empty file is not a shapeless pipeline, it is one nobody has started
+/// writing. Vector's own answer to the same state is a command-line flag, not
+/// a fact about the file.
+#[test]
+fn an_empty_config_is_not_a_shapeless_one() {
+    let graph = inline("");
+
+    assert!(graph.findings.is_empty(), "{:?}", messages(&graph));
+}
+
+/// `wildcard_matching: relaxed` is the config saying a pattern may match
+/// nothing. Reporting it anyway is a false positive on a config Vector runs.
+#[test]
+fn relaxed_wildcards_may_match_nothing() {
+    let graph = graph("relaxed-wildcards.toml");
+
+    assert!(graph.findings.is_empty(), "{:?}", messages(&graph));
+    edge(&graph, "app_logs", "out");
 }
 
 /// A sink is where events stop. Naming one as an input is not a typo the

@@ -18,7 +18,7 @@ pub mod render;
 
 pub use config::{
     read_toml, read_toml_enrichment_tables, read_yaml, read_yaml_enrichment_tables, Component,
-    ConfigError, Input, Role,
+    ConfigError, Document, Input, Role,
 };
 pub use graph::{build, focus, Edge, Finding, Graph, Severity};
 pub use layout::{layout, Layout, Placement, Route, Slot};
@@ -33,10 +33,14 @@ pub use render::{diagram, document, document_of_files};
 pub enum Format {
     Yaml,
     Toml,
+    /// Vector's third config format. Read by the YAML parser, since YAML is a
+    /// superset of JSON and the parser keeps the spans either way.
+    Json,
 }
 
 impl Format {
-    /// The format a file name implies, if any.
+    /// The format a file name implies, if any. The same three extensions
+    /// Vector accepts, and the same ones `--config-dir` keeps.
     #[must_use]
     pub fn of(file_name: &str) -> Option<Self> {
         let name = file_name.to_ascii_lowercase();
@@ -44,8 +48,21 @@ impl Format {
             Some(Self::Yaml)
         } else if name.ends_with(".toml") {
             Some(Self::Toml)
+        } else if name.ends_with(".json") {
+            Some(Self::Json)
         } else {
             None
+        }
+    }
+
+    /// Reads a document in this format.
+    ///
+    /// # Errors
+    /// When the document does not parse as this format at all.
+    pub fn read(self, source: &str) -> Result<Document, ConfigError> {
+        match self {
+            Self::Yaml | Self::Json => read_yaml(source),
+            Self::Toml => read_toml(source),
         }
     }
 }
@@ -100,12 +117,7 @@ pub struct Unreadable {
 /// wrong most of the time, and refusing to draw it then would make this
 /// useless exactly when it is wanted.
 pub fn analyse(source: &str, format: Format, title: &str) -> Result<Analysis, ConfigError> {
-    let components = match format {
-        Format::Yaml => read_yaml(source)?,
-        Format::Toml => read_toml(source)?,
-    };
-
-    let graph = build(components);
+    let graph = build(format.read(source)?);
     let layout = layout(&graph);
 
     Ok(Analysis {
@@ -140,23 +152,29 @@ pub fn analyse_files(files: &[ConfigFile], title: &str) -> Analysis {
 /// where they were in the whole pipeline.
 #[must_use]
 pub fn analyse_files_focused(files: &[ConfigFile], title: &str, focus: Option<&str>) -> Analysis {
-    let mut components = Vec::new();
+    let mut whole = Document::default();
     let mut unreadable = Vec::new();
 
     for (position, file) in files.iter().enumerate() {
         let read = match Format::of(&file.name) {
-            Some(Format::Yaml) => read_yaml(&file.source),
-            Some(Format::Toml) => read_toml(&file.source),
+            Some(format) => format.read(&file.source),
             None => Err(ConfigError {
-                message: format!("{} is neither a .yaml, a .yml nor a .toml file", file.name),
+                message: format!("{} is not a .yaml, .yml, .toml or .json file", file.name),
                 range: None,
             }),
         };
         match read {
-            Ok(read) => components.extend(read.into_iter().map(|mut component| {
-                component.file = position;
-                component
-            })),
+            Ok(read) => {
+                whole.components.extend(read.components.into_iter().map(|mut component| {
+                    component.file = position;
+                    component
+                }));
+                // Vector merges the globals of every file it is given, so one
+                // file relaxing wildcard matching relaxes it for the pipeline.
+                // Erring towards relaxed keeps a setting this crate cannot see
+                // the whole of from inventing errors.
+                whole.relaxed_wildcards |= read.relaxed_wildcards;
+            }
             Err(error) => unreadable.push(Unreadable {
                 file: position,
                 message: error.message,
@@ -166,7 +184,7 @@ pub fn analyse_files_focused(files: &[ConfigFile], title: &str, focus: Option<&s
     }
 
     let names: Vec<String> = files.iter().map(|file| file.name.clone()).collect();
-    let whole = build(components);
+    let whole = build(whole);
     let (graph, focus) = match focus.and_then(|id| graph::focus(&whole, id).map(|g| (g, id))) {
         Some((narrowed, id)) => (narrowed, Some(id.to_owned())),
         None => (whole, None),
@@ -218,7 +236,7 @@ pub fn analyse_file_json(source: &str, file_name: &str) -> String {
     match Format::of(file_name) {
         Some(format) => analyse_json(source, format, file_name),
         None => error_json(
-            &format!("{file_name} is neither a .yaml, a .yml nor a .toml file"),
+            &format!("{file_name} is not a .yaml, .yml, .toml or .json file"),
             None,
         ),
     }
@@ -233,7 +251,7 @@ pub fn analyse_file_json(source: &str, file_name: &str) -> String {
 #[must_use]
 pub fn enrichment_tables(source: &str, file_name: &str) -> Option<Vec<String>> {
     match Format::of(file_name)? {
-        Format::Yaml => read_yaml_enrichment_tables(source).ok(),
+        Format::Yaml | Format::Json => read_yaml_enrichment_tables(source).ok(),
         Format::Toml => read_toml_enrichment_tables(source).ok(),
     }
 }
@@ -406,7 +424,8 @@ type = \"geoip\"
         assert_eq!(Format::of("vector.yaml"), Some(Format::Yaml));
         assert_eq!(Format::of("vector.YML"), Some(Format::Yaml));
         assert_eq!(Format::of("vector.toml"), Some(Format::Toml));
-        assert_eq!(Format::of("vector.json"), None);
+        assert_eq!(Format::of("vector.json"), Some(Format::Json));
+        assert_eq!(Format::of("vector.ini"), None);
     }
 
     #[test]

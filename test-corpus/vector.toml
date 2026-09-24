@@ -12,6 +12,7 @@ include = ["/var/log/app/*.log"]
 
 [transforms.parse]
 type = "remap"
+inputs = ["app_logs"]
 source = '''
 parsed, err = parse_json(.message)
 if err != null {
@@ -28,6 +29,7 @@ if err != null {
 
 [transforms.only_problems]
 type = "filter"
+inputs = ["parse"]
 condition.type = "vrl"
 condition.source = '''
 .log.level == "error"

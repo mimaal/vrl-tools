@@ -45,10 +45,82 @@ Free and open source. Full phased plan lives in @docs/PLAN.md.
   with `--config`, each a complete config, joined (`analyse_files` in
   `crates/vector-topology`). Which files is `vrl-tools.vectorConfig`, the same
   patterns Vector is started with; left empty, every YAML/TOML file in the
-  workspace folder with a top-level Vector section. Enrichment tables come
-  from the same files. Duplicate names across files are errors, as in
-  Vector's `check_shape`. The `--config-dir` subfolder layout (one component
-  per file, named by the file) is not read yet.
+  workspace folder with a top-level Vector section. JSON is a Vector config
+  format too and is read (by the YAML parser — YAML is a superset of JSON, and
+  it keeps the spans), but it is deliberately left out of the *guess*: a repo
+  has hundreds of JSON files that are not configs and every one would be read
+  to find out. Enrichment tables come from the same files. Duplicate names
+  across files are errors, as in Vector's `check_shape`. The `--config-dir`
+  subfolder layout (one component per file, named by the file) is not read yet.
+
+- Which outputs a component has is decided by its `type`, in
+  `crates/vector-topology/src/outputs.rs`, and nothing else can decide it: an
+  `opentelemetry` source is told from a `file` source by its type alone. The
+  table is **additive** — an unknown type keeps the plain default output — so a
+  component newer than the pin draws as it always did instead of dissolving.
+  Every rule in it names the file in Vector it was read from, and
+  `tests/against_vector.rs` re-reads those names from the checkout under
+  `CARGO_HOME/git/checkouts` that the `vector-vrl-functions` git dependency
+  leaves behind, skipping when there is none. It cannot be generated: that
+  would mean compiling Vector. Do not add a rule without the line of Vector
+  it comes from, and do not let the two parsers decide anything themselves —
+  they answer through the `outputs::Fields` trait so they cannot disagree.
+  The non-obvious entries: `opentelemetry` and `datadog_agent`
+  (`multiple_outputs`) have ports and **no default output**; `reroute_dropped`
+  belongs to `remap` alone.
+
+- `enrichment_tables` are components, not just names. Vector compiles a table
+  into a sink (`as_sink`), and a `memory` table with `source_config` into a
+  source as well, under the separate name `source_key` gives it — plus an
+  `expired` output when `export_expired_items` is set. Both halves are
+  `Role::Table`; which half a component is shows in whether it takes inputs or
+  offers outputs. A table is exempt from the "has no inputs" check exactly as
+  in Vector, whose `check_shape` runs before tables join the sinks.
+
+- Vector warns about an **output** with no consumers, not a component
+  (`validation::warnings` builds `OutputId`s). A `route` with three routes
+  wired to one sink is not an orphan and is still throwing two thirds of its
+  events away, which is the case the per-component check could not see.
+
+- The graph's checks are Vector's, each named where it lives, in the module
+  doc of `crates/vector-topology/src/graph.rs`. Two that are easy to get
+  wrong: a name containing a dot is fatal (`check_names`) — so the comment
+  that used to justify the resolution order by "a component may legally be
+  named with a dot" was simply false — and `wildcard_matching: relaxed` makes
+  a pattern matching nothing legal, so reporting it is a false positive.
+  Typechecking edges (log/metric/trace) is Vector's `graph.typecheck()` and is
+  deliberately not done here.
+
+- A workspace holds more than one pipeline often enough to matter, and reading
+  every config file in it as one config produced nonsense (on this repo's own
+  corpus: 18 files, 73 components, 44 "two components are called `app_logs`").
+  They are split by **Vector's rule, not folder names**: files whose component
+  names collide cannot be one config, because `check_shape` refuses to start on
+  that. The whole folder is tried first and split only where names clash — next
+  directory down, then file by file — so `--config 'config/**/*.toml'` stays
+  whole. The algorithm is `editors/vscode/src/grouping.ts`, deliberately free
+  of both `vscode` and the wasm module so `npm run test:grouping` can exercise
+  it; like `analysis.ts`, it is a hand-written reader the compiler cannot keep
+  honest. Configured `vectorConfig` patterns are never split: they are the
+  files Vector is started with, whatever the names do.
+
+- The graph is rebuilt between keystrokes, so the checks are written to scale.
+  Cycle detection is **Tarjan's algorithm, iterative**, not "can each component
+  reach itself?" — that reading was cubic (a chain of 400 took 212ms, now
+  13ms) and recursive, and deep recursion in wasm is a trap that costs the
+  whole module. Resolution, duplicate names, unread outputs and the Mermaid
+  render all index once instead of scanning per item. Measure before changing
+  any of it; the bench that found this is a fan-out and a chain at 25..400
+  components.
+
+- The way into the graph is the **activity bar**, not the editor title. The
+  title button only exists while a config is the open file, and the open file
+  is usually the `.vrl` program whose transform is being written. The view
+  (`editors/vscode/src/sidebar.ts`) is a tree, not a second drawing: a sidebar
+  is 300px wide and a left-to-right pipeline will not fit in one. It activates
+  the extension by `onView`, so the icon costs nothing until it is opened, and
+  `showPipelineGraph` finds the pipeline itself rather than requiring a config
+  in front of it.
 
 - The pinned compiler defines the language the grammar paints. Two constructs
   that older VRL documentation still shows are gone and must not come back:
@@ -143,13 +215,15 @@ Free and open source. Full phased plan lives in @docs/PLAN.md.
 ## Verification
 
 - `cargo test` across the workspace before closing out a phase.
-- `npm test` runs five suites; `test:snippets` compiles every expansion and
+- `npm test` runs six suites; `test:snippets` compiles every expansion and
   `test:diagnostics` compiles the corpus, including every block the injection
   grammars paint as VRL inside a Vector config. Anything this repo shows as
   valid VRL has to be accepted by the pinned compiler. `test:analysis` covers
   `editors/vscode/src/analysis.ts`, which is the only hand-written reader of
   VRL in the project — it answers "where is the cursor", never "is this
   valid" — and is therefore the only one the compiler cannot keep honest.
+  `test:grouping` covers `editors/vscode/src/grouping.ts` for the same reason:
+  no amount of compiling VRL says whether two folders are one pipeline.
 - Test the extension against the real parsers in `test-corpus/`, never against
   toy examples. That corpus is generated from the `vrl` crate's stdlib examples
   at test time, plus synthetic parsers built on public log formats.

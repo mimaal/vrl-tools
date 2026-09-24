@@ -140,13 +140,15 @@ export interface TopologyPlacement {
 
 export interface TopologyComponent {
   readonly id: string;
-  readonly role: 'source' | 'transform' | 'sink';
+  readonly role: 'source' | 'transform' | 'sink' | 'table';
   readonly type: string;
   readonly inputs: readonly { readonly text: string; readonly range: VrlRange }[];
   /** Where the component is declared, for going to it from the graph. */
   readonly range: VrlRange;
-  /** The outputs it offers besides its default one: a route's routes, `dropped`. */
+  /** The outputs it offers besides its default one: a route's routes, `dropped`, a source's ports. */
   readonly namedOutputs: readonly string[];
+  /** Whether an input can name the component itself. `false` for a router. */
+  readonly defaultOutput: boolean;
   /** Which of `Topology.files` declares it. */
   readonly file: number;
 }

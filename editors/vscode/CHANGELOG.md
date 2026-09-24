@@ -4,6 +4,97 @@ Versions before 0.5.0 were never published; they exist as tags and as `.vsix`
 files built locally. They are listed here because the history explains what the
 extension is.
 
+## Unreleased
+
+The graph's model of a Vector topology was checked, component by component,
+against Vector's own source at the release the `vrl` pin comes from. Six things
+it got wrong are fixed, and every claim it makes is now re-read from that
+source by `cargo test` whenever a checkout of Vector is on the machine.
+
+- **Sources with named outputs.** An `opentelemetry` source has `logs`,
+  `metrics` and `traces` and **no default output**, and a `datadog_agent` with
+  `multiple_outputs` has `logs`, `metrics`, `traces` and `llmobs` (minus
+  whichever its `disable_*` flags turn off). The graph knew of no source with
+  outputs, so it drew the one arrow Vector rejects — `inputs: [otel]` — and
+  reported the ones it accepts, `inputs: [otel.logs]`, as naming nothing. Both
+  are now right, and a disabled output is gone rather than empty.
+- **An output nobody reads is a warning of its own.** Vector warns per output
+  ("Transform \"split._unmatched\" has no consumers"); the graph only noticed a
+  component nothing at all read. A `route` with three routes and one sink
+  looked finished while two thirds of its events were built and dropped. Each
+  unread output now says so, by name.
+- **Enrichment tables are in the pipeline.** A `memory` table takes `inputs`
+  like a sink, and with `source_config` it is also a source, under the separate
+  name its `source_key` gives — with an `expired` output when
+  `export_expired_items` is set. None of it was drawn, so the table's inputs
+  were missing, whatever fed it looked orphaned, and a sink reading it back was
+  reported as naming nothing.
+- **Three checks from Vector's `check_shape` that were missing.** A transform
+  or sink with no `inputs` at all; the same input named twice, which was also
+  drawn as two arrows on top of each other; and a pipeline with no sources or
+  no sinks. An empty file stays silent: that is every config for its first few
+  seconds.
+- **A component whose name contains a dot** is rejected by Vector before
+  anything else, because a dot is how an input picks one output. It is now
+  reported, and still drawn.
+- **`wildcard_matching: relaxed`** is honoured. It is the config saying a
+  pattern may match nothing, so reporting one was a false positive on a config
+  Vector runs.
+- **JSON configs.** Vector reads `.json` as well as `.yaml` and `.toml`. A
+  JSON config now graphs like any other; it is not scanned for when guessing
+  which files are Vector's, because a repository's other JSON files are many
+  and are not configs.
+
+And the guess about which files are one pipeline, which was wrong in a way
+nothing caught because the tests always passed files explicitly:
+
+- **A workspace can hold more than one pipeline.** Every config file with a
+  Vector section in it was read as one config — so `config/prod` and
+  `config/staging`, or a folder of examples, came out as a single topology
+  nobody runs, buried under "two components are called `app_logs`". On this
+  repository's own test corpus that was 18 files, 73 components and 58
+  problems, 44 of them that error.
+
+  They are now told apart by **Vector's rule, not a guess about folder
+  names**: files whose component names collide cannot be one config, because
+  `check_shape` refuses to start on exactly that. The whole folder is tried
+  first and split only where the names actually clash — by the next directory
+  down, then file by file. A pipeline genuinely spread across subdirectories,
+  which is what `--config 'config/**/*.toml'` is for, stays whole. The same 18
+  files now come out as 18 pipelines, each saying only what its own file says.
+- **Choosing between them.** When a workspace has more than one, the sidebar's
+  first row says which you are looking at and opens a list of the others.
+  The graph follows the same choice, and it is remembered per workspace.
+
+And it keeps up with a large pipeline:
+
+- **Loops are found with Tarjan's algorithm**, once over the whole graph,
+  instead of asking each component in turn whether it can reach itself. That
+  question is the same answer for cubic work: a chain of 400 transforms took
+  212ms, which is longer than the gap between two keystrokes, and it now takes
+  13ms. It is iterative too, so a long pipeline can no longer overflow the
+  stack — in wasm that is a trap the whole module has to be rebuilt from. A
+  chain of 6,000 components is now read without complaint.
+- Resolving inputs, finding duplicate names, spotting unread outputs, drawing
+  the Mermaid diagram and narrowing to one component all looked things up by
+  walking a list. They use an index built once per read.
+- The graph and the sidebar each re-read every config in the workspace when
+  one of them redraws. What each file declares is now remembered against its
+  own text, so typing in one config re-parses that one rather than all of
+  them.
+
+And a way in that does not depend on the file in front:
+
+- **A Vector view in the activity bar.** The graph button only ever appeared
+  while a Vector config was the open file, which is the wrong moment — the file
+  in front is usually the `.vrl` program whose transform you are writing. The
+  new view lists the pipeline's sources, transforms, sinks and enrichment
+  tables, with each component's outputs and its own problems under it, and
+  every row opens the graph narrowed to that component and goes to where it is
+  declared. **Show pipeline graph** and **Export Markdown** sit in its title
+  bar, and both commands now find the pipeline themselves rather than needing a
+  config open.
+
 ## 0.6.3 — 2026-09-21
 
 - **Large pipelines are navigable.** The wheel scrolls the graph and

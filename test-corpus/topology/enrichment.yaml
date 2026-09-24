@@ -1,0 +1,47 @@
+# A `memory` enrichment table is two components: the table events are written
+# into, which takes `inputs` like a sink, and the source they are read back out
+# of, under the separate name `source_config.source_key` gives it. With
+# `export_expired_items` that source has an `expired` output besides its
+# default one.
+#
+# The table is reached from VRL by name — `get_enrichment_table_record("seen",
+# …)` — so nothing in the pipeline reads `seen` itself.
+
+sources:
+  app_logs:
+    type: file
+    include:
+      - /var/log/app/*.log
+
+enrichment_tables:
+  seen:
+    type: memory
+    inputs:
+      - app_logs
+    ttl: 3600
+    source_config:
+      source_key: seen_export
+      export_interval: 60
+      export_expired_items: true
+
+  hosts:
+    type: file
+    file:
+      path: /etc/vector/hosts.csv
+      encoding:
+        type: csv
+
+sinks:
+  exported:
+    type: console
+    inputs:
+      - seen_export
+    encoding:
+      codec: json
+
+  expired_out:
+    type: console
+    inputs:
+      - seen_export.expired
+    encoding:
+      codec: json

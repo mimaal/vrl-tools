@@ -1,0 +1,30 @@
+# `split` routes three ways and only one of them is wired up. Vector starts on
+# this and warns twice — "Transform \"split.warnings\" has no consumers" and
+# the same for `split._unmatched` — and the events going down those two routes
+# are built and dropped forever.
+#
+# This is the case a per-component check cannot see: something does read
+# `split`, so the transform is not an orphan. Two of its outputs are.
+
+sources:
+  app_logs:
+    type: file
+    include:
+      - /var/log/app/*.log
+
+transforms:
+  split:
+    type: route
+    inputs:
+      - app_logs
+    route:
+      errors: '.level == "error"'
+      warnings: '.level == "warn"'
+
+sinks:
+  errors_out:
+    type: console
+    inputs:
+      - split.errors
+    encoding:
+      codec: json

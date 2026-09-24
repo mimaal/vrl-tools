@@ -1,0 +1,19 @@
+# A component called `app.logs`. Vector rejects the name before it resolves
+# anything ("Component name \"app.logs\" should not contain a \".\""), because
+# a dot is how an input picks one output of a component: `app.logs` would be
+# ambiguous with an `app` that has a `logs` output — which is exactly what an
+# `opentelemetry` source has.
+
+sources:
+  app.logs:
+    type: file
+    include:
+      - /var/log/app/*.log
+
+sinks:
+  out:
+    type: console
+    inputs:
+      - app.logs
+    encoding:
+      codec: json

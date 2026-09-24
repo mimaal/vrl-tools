@@ -1,12 +1,14 @@
 //! Reading the components out of a Vector configuration.
 //!
-//! A Vector config is three maps of named components — `sources`, `transforms`
-//! and `sinks` — and every transform and sink carries `inputs`, the IDs of the
-//! components feeding it. That is the whole graph, stated outright, which is
-//! why it can be read rather than inferred.
+//! A Vector config is four maps of named components — `sources`, `transforms`,
+//! `sinks` and `enrichment_tables` — and every transform, sink and table
+//! carries `inputs`, the IDs of the components feeding it. That is the whole
+//! graph, stated outright, which is why it can be read rather than inferred.
 //!
 //! Both formats land in the same [`Component`] list, so everything downstream
-//! is written once and neither knows nor cares which it came from.
+//! is written once and neither knows nor cares which it came from. What a
+//! component's fields *mean* is [`crate::outputs`]'s, reached through the
+//! [`Fields`] trait both parsers implement, so the two cannot drift apart.
 //!
 //! Positions are kept from the start. A graph that cannot take you to the
 //! component you clicked is half a feature, and spans cannot be retrofitted
@@ -16,15 +18,21 @@
 use editor_text::{LineIndex, Range};
 use saphyr::{LoadableYamlNode, MarkedYaml};
 
-use crate::outputs;
+use crate::outputs::{self, Fields};
 
-/// Which of the three maps a component came from.
+/// Which of the four maps a component came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     Source,
     Transform,
     Sink,
+    /// An `enrichment_tables` entry. Vector compiles one into a sink, and a
+    /// `memory` table with a `source_config` into a source as well, under the
+    /// separate name its `source_key` gives. Both halves are read as this
+    /// role; which one a component is shows in whether it takes inputs or
+    /// offers outputs.
+    Table,
 }
 
 impl Role {
@@ -34,10 +42,21 @@ impl Role {
             Self::Source => "sources",
             Self::Transform => "transforms",
             Self::Sink => "sinks",
+            Self::Table => ENRICHMENT_TABLES,
         }
     }
 
-    const ALL: [Self; 3] = [Self::Source, Self::Transform, Self::Sink];
+    const ALL: [Self; 4] = [Self::Source, Self::Transform, Self::Sink, Self::Table];
+
+    /// Whether Vector requires this role to declare `inputs`.
+    ///
+    /// `check_shape` reports "has no inputs" for a transform or a sink, and
+    /// only for those two: it never looks at the enrichment tables, so a table
+    /// nothing writes into is perfectly legal — it is loaded from a file, or
+    /// filled by VRL.
+    pub(crate) const fn needs_inputs(self) -> bool {
+        matches!(self, Self::Transform | Self::Sink)
+    }
 }
 
 /// One entry of a component's `inputs`, as written.
@@ -52,16 +71,17 @@ pub struct Input {
     pub range: Range,
 }
 
-/// A source, transform or sink.
+/// A source, transform, sink or enrichment table.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Component {
     pub id: String,
     pub role: Role,
-    /// The `type` field: `file`, `remap`, `route`, `console`.
+    /// The `type` field: `file`, `remap`, `route`, `console`, `memory`.
     ///
     /// Empty when the config omits it. Vector would reject that, but it is no
-    /// reason to refuse to draw what is there.
+    /// reason to refuse to draw what is there. It is also what decides the
+    /// outputs, so a component without one gets the plain default output.
     #[serde(rename = "type")]
     pub component_type: String,
     pub inputs: Vec<Input>,
@@ -71,12 +91,41 @@ pub struct Component {
     /// [`crate::outputs`].
     pub named_outputs: Vec<String>,
     /// Whether an input can name the component itself. `false` for a router,
-    /// whose events all leave by named outputs. See [`crate::outputs`].
+    /// for an `opentelemetry` source, and for anything events only end at.
+    /// See [`crate::outputs`].
     pub default_output: bool,
     /// Which of the files being read declares it, as an index into the list
     /// the caller gave. `range` and every input's range are in that file.
     /// Always 0 when a single file is read.
     pub file: usize,
+}
+
+impl Component {
+    /// Whether anything can read this component at all.
+    #[must_use]
+    pub fn has_outputs(&self) -> bool {
+        self.default_output || !self.named_outputs.is_empty()
+    }
+
+    /// Every output an input can name, as Vector writes it: the bare ID for
+    /// the default output, `id.port` for each named one.
+    pub(crate) fn outputs(&self) -> impl Iterator<Item = (Option<&String>, String)> {
+        let default = self.default_output.then(|| (None, self.id.clone()));
+        let named = self
+            .named_outputs
+            .iter()
+            .map(move |output| (Some(output), format!("{}.{output}", self.id)));
+        default.into_iter().chain(named)
+    }
+}
+
+/// A config file, read.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Document {
+    pub components: Vec<Component>,
+    /// The global `wildcard_matching: relaxed`, which makes an input pattern
+    /// matching nothing legal instead of fatal. See [`crate::graph`].
+    pub relaxed_wildcards: bool,
 }
 
 /// Why a config could not be read at all.
@@ -87,11 +136,21 @@ pub struct ConfigError {
     pub range: Option<Range>,
 }
 
+/// The top-level key Vector reads enrichment tables from.
+const ENRICHMENT_TABLES: &str = "enrichment_tables";
+
+/// The global key that relaxes wildcard matching, and the value that does it.
+const WILDCARD_MATCHING: &str = "wildcard_matching";
+const RELAXED: &str = "relaxed";
+
 /// Reads a YAML Vector configuration.
+///
+/// JSON is read by this too: Vector accepts `.json` configs, and YAML is a
+/// superset of JSON, so the same parser handles both and keeps the spans.
 ///
 /// # Errors
 /// When the document is not YAML.
-pub fn read_yaml(source: &str) -> Result<Vec<Component>, ConfigError> {
+pub fn read_yaml(source: &str) -> Result<Document, ConfigError> {
     let index = LineIndex::new(source);
 
     let documents = MarkedYaml::load_from_str(source).map_err(|error| ConfigError {
@@ -102,7 +161,7 @@ pub fn read_yaml(source: &str) -> Result<Vec<Component>, ConfigError> {
     // An empty file is an empty config, not a failure. It is what every config
     // looks like for its first few seconds.
     let Some(root) = documents.first() else {
-        return Ok(Vec::new());
+        return Ok(Document::default());
     };
 
     let mut components = Vec::new();
@@ -116,27 +175,128 @@ pub fn read_yaml(source: &str) -> Result<Vec<Component>, ConfigError> {
 
         for (key, body) in entries {
             let Some(id) = key.data.as_str() else { continue };
-
-            let outputs = yaml_outputs(body);
-            components.push(Component {
-                id: id.to_owned(),
+            let fields = YamlFields(body);
+            push(
+                &mut components,
+                id,
                 role,
-                component_type: body
-                    .data
-                    .as_mapping_get("type")
-                    .and_then(|node| node.data.as_str())
-                    .unwrap_or_default()
-                    .to_owned(),
-                inputs: yaml_inputs(body, &index),
-                range: yaml_range(key, &index),
-                named_outputs: outputs.named,
-                default_output: outputs.default,
+                &fields,
+                yaml_inputs(body, &index),
+                yaml_range(key, &index),
+            );
+        }
+    }
+
+    Ok(Document {
+        components,
+        relaxed_wildcards: root
+            .data
+            .as_mapping_get(WILDCARD_MATCHING)
+            .and_then(|node| node.data.as_str())
+            == Some(RELAXED),
+    })
+}
+
+/// Adds a component and, when it has one, the source half of an enrichment
+/// table — a second component under its own name, which is the shape Vector
+/// compiles it into.
+///
+/// Its range is the table's, because that is where the name is written and so
+/// where clicking the node should land.
+fn push<F: Fields>(
+    components: &mut Vec<Component>,
+    id: &str,
+    role: Role,
+    fields: &F,
+    inputs: Vec<Input>,
+    range: Range,
+) {
+    let component_type = fields.text("type").unwrap_or_default();
+    let outputs = outputs::declared(role, &component_type, fields);
+
+    if role == Role::Table {
+        if let Some((source_key, source)) = outputs::table_source(&component_type, fields) {
+            components.push(Component {
+                id: source_key,
+                role,
+                component_type: component_type.clone(),
+                inputs: Vec::new(),
+                range,
+                named_outputs: source.named,
+                default_output: source.default,
                 file: 0,
             });
         }
     }
 
-    Ok(components)
+    components.push(Component {
+        id: id.to_owned(),
+        role,
+        component_type,
+        inputs,
+        range,
+        named_outputs: outputs.named,
+        default_output: outputs.default,
+        file: 0,
+    });
+}
+
+/// One component's fields, as saphyr holds them.
+#[derive(Clone, Copy)]
+struct YamlFields<'a, 'b>(&'a MarkedYaml<'b>);
+
+impl Fields for YamlFields<'_, '_> {
+    fn flag(&self, key: &str, default: bool) -> bool {
+        self.0
+            .data
+            .as_mapping_get(key)
+            .and_then(|node| node.data.as_bool())
+            .unwrap_or(default)
+    }
+
+    fn text(&self, key: &str) -> Option<String> {
+        self.0
+            .data
+            .as_mapping_get(key)
+            .and_then(|node| node.data.as_str())
+            .map(ToOwned::to_owned)
+    }
+
+    fn keys(&self, key: &str) -> Option<Vec<String>> {
+        let node = self.0.data.as_mapping_get(key)?;
+        Some(
+            node.data
+                .as_mapping()?
+                .keys()
+                .filter_map(|key| key.data.as_str().map(ToOwned::to_owned))
+                .collect(),
+        )
+    }
+
+    fn names(&self, key: &str) -> Option<Vec<String>> {
+        let node = self.0.data.as_mapping_get(key)?;
+        Some(
+            node.data
+                .as_sequence()?
+                .iter()
+                .filter_map(|entry| {
+                    entry
+                        .data
+                        .as_mapping_get("name")
+                        .and_then(|name| name.data.as_str())
+                        .map(ToOwned::to_owned)
+                })
+                .collect(),
+        )
+    }
+
+    fn has(&self, key: &str) -> bool {
+        self.0.data.as_mapping_get(key).is_some()
+    }
+
+    fn child(&self, key: &str) -> Option<Self> {
+        self.0.data.as_mapping_get(key).map(YamlFields)
+    }
 }
 
 fn yaml_range(node: &MarkedYaml<'_>, index: &LineIndex<'_>) -> Range {
@@ -170,52 +330,11 @@ fn yaml_inputs(body: &MarkedYaml<'_>, index: &LineIndex<'_>) -> Vec<Input> {
     })
 }
 
-fn yaml_outputs(body: &MarkedYaml<'_>) -> outputs::Outputs {
-    let routes = body.data.as_mapping_get("route").and_then(|node| {
-        node.data.as_mapping().map(|entries| {
-            entries
-                .keys()
-                .filter_map(|key| key.data.as_str().map(ToOwned::to_owned))
-                .collect::<Vec<_>>()
-        })
-    });
-
-    // `exclusive_route`: a list of `{name, condition}`.
-    let exclusive = body.data.as_mapping_get("routes").and_then(|node| {
-        node.data.as_sequence().map(|entries| {
-            entries
-                .iter()
-                .filter_map(|entry| {
-                    entry
-                        .data
-                        .as_mapping_get("name")
-                        .and_then(|name| name.data.as_str())
-                        .map(ToOwned::to_owned)
-                })
-                .collect::<Vec<_>>()
-        })
-    });
-
-    outputs::declared(
-        routes,
-        exclusive,
-        yaml_flag(body, "reroute_dropped", false),
-        yaml_flag(body, "reroute_unmatched", true),
-    )
-}
-
-fn yaml_flag(body: &MarkedYaml<'_>, key: &str, default: bool) -> bool {
-    body.data
-        .as_mapping_get(key)
-        .and_then(|node| node.data.as_bool())
-        .unwrap_or(default)
-}
-
 /// Reads a TOML Vector configuration.
 ///
 /// # Errors
 /// When the document is not TOML.
-pub fn read_toml(source: &str) -> Result<Vec<Component>, ConfigError> {
+pub fn read_toml(source: &str) -> Result<Document, ConfigError> {
     let index = LineIndex::new(source);
 
     // `Document`, not `DocumentMut`. The mutable document is the one built for
@@ -243,28 +362,82 @@ pub fn read_toml(source: &str) -> Result<Vec<Component>, ConfigError> {
                 continue;
             };
 
-            let outputs = toml_outputs(table);
-            components.push(Component {
-                id: id.to_owned(),
+            let fields = TomlFields(table);
+            push(
+                &mut components,
+                id,
                 role,
-                component_type: table
-                    .get("type")
-                    .and_then(toml_edit::Item::as_str)
-                    .unwrap_or_default()
-                    .to_owned(),
-                inputs: toml_inputs(table, &index),
-                range: section
+                &fields,
+                toml_inputs(table, &index),
+                section
                     .key(id)
                     .and_then(toml_edit::Key::span)
                     .map_or_else(Range::default, |span| index.range(span)),
-                named_outputs: outputs.named,
-                default_output: outputs.default,
-                file: 0,
-            });
+            );
         }
     }
 
-    Ok(components)
+    Ok(Document {
+        components,
+        relaxed_wildcards: document
+            .get(WILDCARD_MATCHING)
+            .and_then(toml_edit::Item::as_str)
+            == Some(RELAXED),
+    })
+}
+
+/// One component's fields, as `toml_edit` holds them.
+#[derive(Clone, Copy)]
+struct TomlFields<'a>(&'a dyn toml_edit::TableLike);
+
+impl Fields for TomlFields<'_> {
+    fn flag(&self, key: &str, default: bool) -> bool {
+        self.0
+            .get(key)
+            .and_then(toml_edit::Item::as_bool)
+            .unwrap_or(default)
+    }
+
+    fn text(&self, key: &str) -> Option<String> {
+        self.0
+            .get(key)
+            .and_then(toml_edit::Item::as_str)
+            .map(ToOwned::to_owned)
+    }
+
+    fn keys(&self, key: &str) -> Option<Vec<String>> {
+        let table = self.0.get(key)?.as_table_like()?;
+        Some(table.iter().map(|(name, _)| name.to_owned()).collect())
+    }
+
+    /// `[[transforms.x.routes]]` tables, or an inline array of
+    /// `{ name = ..., condition = ... }`.
+    fn names(&self, key: &str) -> Option<Vec<String>> {
+        let item = self.0.get(key)?;
+        let name = |entry: &dyn toml_edit::TableLike| {
+            entry
+                .get("name")
+                .and_then(toml_edit::Item::as_str)
+                .map(ToOwned::to_owned)
+        };
+        if let Some(tables) = item.as_array_of_tables() {
+            return Some(tables.iter().filter_map(|table| name(table)).collect());
+        }
+        Some(
+            item.as_array()?
+                .iter()
+                .filter_map(|value| value.as_inline_table().and_then(|table| name(table)))
+                .collect(),
+        )
+    }
+
+    fn has(&self, key: &str) -> bool {
+        self.0.get(key).is_some()
+    }
+
+    fn child(&self, key: &str) -> Option<Self> {
+        self.0.get(key).and_then(toml_edit::Item::as_table_like).map(TomlFields)
+    }
 }
 
 fn toml_inputs(table: &dyn toml_edit::TableLike, index: &LineIndex<'_>) -> Vec<Input> {
@@ -294,53 +467,6 @@ fn toml_inputs(table: &dyn toml_edit::TableLike, index: &LineIndex<'_>) -> Vec<I
             })
             .collect()
     })
-}
-
-fn toml_outputs(table: &dyn toml_edit::TableLike) -> outputs::Outputs {
-    let routes = table
-        .get("route")
-        .and_then(toml_edit::Item::as_table_like)
-        .map(|routes| {
-            routes
-                .iter()
-                .map(|(name, _)| name.to_owned())
-                .collect::<Vec<_>>()
-        });
-
-    // `exclusive_route`: `[[transforms.x.routes]]` tables, or an inline array
-    // of `{ name = ..., condition = ... }`.
-    let exclusive = table.get("routes").and_then(|item| {
-        let name = |entry: &dyn toml_edit::TableLike| {
-            entry
-                .get("name")
-                .and_then(toml_edit::Item::as_str)
-                .map(ToOwned::to_owned)
-        };
-        if let Some(tables) = item.as_array_of_tables() {
-            Some(tables.iter().filter_map(|t| name(t)).collect::<Vec<_>>())
-        } else {
-            item.as_array().map(|values| {
-                values
-                    .iter()
-                    .filter_map(|value| value.as_inline_table().and_then(|t| name(t)))
-                    .collect::<Vec<_>>()
-            })
-        }
-    });
-
-    outputs::declared(
-        routes,
-        exclusive,
-        toml_flag(table, "reroute_dropped", false),
-        toml_flag(table, "reroute_unmatched", true),
-    )
-}
-
-fn toml_flag(table: &dyn toml_edit::TableLike, key: &str, default: bool) -> bool {
-    table
-        .get(key)
-        .and_then(toml_edit::Item::as_bool)
-        .unwrap_or(default)
 }
 
 /// The names a YAML config declares under `enrichment_tables`.
@@ -388,5 +514,107 @@ pub fn read_toml_enrichment_tables(source: &str) -> Result<Vec<String>, ConfigEr
         .unwrap_or_default())
 }
 
-/// The top-level key Vector reads enrichment tables from.
-const ENRICHMENT_TABLES: &str = "enrichment_tables";
+#[cfg(test)]
+mod tests {
+    use super::{read_toml, read_yaml, Role};
+
+    /// The two readers have to agree about everything, so they are given the
+    /// same config twice and compared field by field.
+    fn both(yaml: &str, toml: &str) -> Vec<(String, Role, bool, Vec<String>)> {
+        let of = |components: Vec<super::Component>| {
+            components
+                .into_iter()
+                .map(|c| (c.id, c.role, c.default_output, c.named_outputs))
+                .collect::<Vec<_>>()
+        };
+        let from_yaml = of(read_yaml(yaml).expect("yaml parses").components);
+        let from_toml = of(read_toml(toml).expect("toml parses").components);
+        assert_eq!(from_yaml, from_toml, "the two readers disagree");
+        from_yaml
+    }
+
+    #[test]
+    fn a_router_is_read_the_same_from_both_formats() {
+        let read = both(
+            "transforms:\n  split:\n    type: route\n    inputs: [in]\n    route:\n      errors: 'true'\n      warns: 'true'\n",
+            "[transforms.split]\ntype = \"route\"\ninputs = [\"in\"]\n[transforms.split.route]\nerrors = \"true\"\nwarns = \"true\"\n",
+        );
+
+        assert_eq!(read.len(), 1);
+        assert!(!read[0].2, "a router has no default output");
+        assert_eq!(read[0].3, ["errors", "warns", "_unmatched"]);
+    }
+
+    #[test]
+    fn an_exclusive_route_is_read_the_same_from_both_formats() {
+        let read = both(
+            "transforms:\n  split:\n    type: exclusive_route\n    inputs: [in]\n    routes:\n      - name: a\n        condition: 'true'\n      - name: b\n        condition: 'true'\n",
+            "[[transforms.split.routes]]\nname = \"a\"\ncondition = \"true\"\n\n[[transforms.split.routes]]\nname = \"b\"\ncondition = \"true\"\n\n[transforms.split]\ntype = \"exclusive_route\"\ninputs = [\"in\"]\n",
+        );
+
+        assert_eq!(read[0].3, ["a", "b", "_unmatched"]);
+    }
+
+    #[test]
+    fn a_source_with_ports_is_read_the_same_from_both_formats() {
+        let read = both(
+            "sources:\n  otel:\n    type: opentelemetry\n",
+            "[sources.otel]\ntype = \"opentelemetry\"\n",
+        );
+
+        assert!(!read[0].2);
+        assert_eq!(read[0].3, ["logs", "metrics", "traces"]);
+    }
+
+    /// A `memory` table is two components: the table events are written into,
+    /// and the source they are read back out of, under its own name.
+    #[test]
+    fn a_memory_table_is_read_as_both_halves() {
+        let read = both(
+            "enrichment_tables:\n  cache:\n    type: memory\n    inputs: [parse]\n    source_config:\n      source_key: cache_out\n      export_expired_items: true\n",
+            "[enrichment_tables.cache]\ntype = \"memory\"\ninputs = [\"parse\"]\n[enrichment_tables.cache.source_config]\nsource_key = \"cache_out\"\nexport_expired_items = true\n",
+        );
+
+        assert_eq!(read.len(), 2);
+        let source = read.iter().find(|(id, ..)| id == "cache_out").expect("the source half");
+        assert_eq!(source.1, Role::Table);
+        assert!(source.2);
+        assert_eq!(source.3, ["expired"]);
+
+        let table = read.iter().find(|(id, ..)| id == "cache").expect("the table");
+        assert!(!table.2, "nothing reads the table itself");
+    }
+
+    #[test]
+    fn a_plain_table_is_one_component_that_nothing_reads() {
+        let read = both(
+            "enrichment_tables:\n  hosts:\n    type: file\n",
+            "[enrichment_tables.hosts]\ntype = \"file\"\n",
+        );
+
+        assert_eq!(read.len(), 1);
+        assert!(!read[0].2);
+        assert!(read[0].3.is_empty());
+    }
+
+    #[test]
+    fn relaxed_wildcards_are_read_from_both_formats() {
+        assert!(read_yaml("wildcard_matching: relaxed\nsources: {}\n").unwrap().relaxed_wildcards);
+        assert!(read_toml("wildcard_matching = \"relaxed\"\n").unwrap().relaxed_wildcards);
+        assert!(!read_yaml("wildcard_matching: strict\n").unwrap().relaxed_wildcards);
+        assert!(!read_yaml("sources: {}\n").unwrap().relaxed_wildcards);
+    }
+
+    /// JSON is a Vector config format, and YAML is a superset of it.
+    #[test]
+    fn a_json_config_is_read_by_the_yaml_parser() {
+        let read = read_yaml(
+            r#"{"sources": {"app": {"type": "file"}}, "sinks": {"out": {"type": "console", "inputs": ["app"]}}}"#,
+        )
+        .expect("parses");
+
+        let ids: Vec<&str> = read.components.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, ["app", "out"]);
+        assert_eq!(read.components[1].inputs[0].text, "app");
+    }
+}

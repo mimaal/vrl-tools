@@ -10,6 +10,8 @@
 //! Rendering happens here, in the crate that resolved the graph, so that it
 //! can be tested without an editor.
 
+use std::collections::HashMap;
+
 use crate::config::Role;
 use crate::graph::{Graph, Severity};
 
@@ -46,8 +48,18 @@ fn summary(graph: &Graph) -> String {
             .count()
     };
 
+    // Tables are named only when there are any, so the usual config keeps the
+    // sentence it always had.
+    let tables = match count(Role::Table) {
+        0 => String::new(),
+        tables => format!(
+            ", {tables} {}",
+            plural(tables, "enrichment table", "enrichment tables"),
+        ),
+    };
+
     format!(
-        "{} {}, {} {}, {} {}, {} {}.",
+        "{} {}, {} {}, {} {}{tables}, {} {}.",
         count(Role::Source),
         plural(count(Role::Source), "source", "sources"),
         count(Role::Transform),
@@ -81,19 +93,36 @@ pub fn diagram(graph: &Graph) -> String {
 
         // Shapes carry the role, so the picture reads without a legend:
         // rounded for where events come in, square for what happens to them,
-        // a cylinder for where they end up.
+        // a cylinder for where they end up, a framed box for a table, which is
+        // consulted from VRL rather than passed through.
+        //
+        // `vector graph --format mermaid` uses a different set — parallelograms
+        // for sources and sinks, a rhombus for transforms, a cylinder for
+        // tables. These are not copied: a rhombus around two lines of text is
+        // unreadable, and every shape below is one this crate's tests have
+        // pushed a quoted, `<br/>`-carrying label through.
         let shape = match component.role {
             Role::Source => format!("([\"{label}\"])"),
             Role::Transform => format!("[\"{label}\"]"),
             Role::Sink => format!("[(\"{label}\")]"),
+            Role::Table => format!("[[\"{label}\"]]"),
         };
 
         out.push_str(&format!("  {}{shape}\n", node_id(position)));
     }
 
+    // Built once: an edge names its ends, and searching the component list for
+    // each of them is quadratic on a pipeline with hundreds of arrows.
+    let mut index: HashMap<&str, usize> = HashMap::with_capacity(graph.components.len());
+    for (position, component) in graph.components.iter().enumerate() {
+        index.entry(component.id.as_str()).or_insert(position);
+    }
+
     for edge in &graph.edges {
-        let (Some(from), Some(to)) = (index_of(graph, &edge.from), index_of(graph, &edge.to))
-        else {
+        let (Some(&from), Some(&to)) = (
+            index.get(edge.from.as_str()),
+            index.get(edge.to.as_str()),
+        ) else {
             continue;
         };
 
@@ -144,13 +173,6 @@ fn problems(graph: &Graph, files: &[String]) -> String {
 /// quoted and safe.
 fn node_id(position: usize) -> String {
     format!("n{position}")
-}
-
-fn index_of(graph: &Graph, id: &str) -> Option<usize> {
-    graph
-        .components
-        .iter()
-        .position(|component| component.id == id)
 }
 
 /// Makes a string safe inside a quoted Mermaid label.

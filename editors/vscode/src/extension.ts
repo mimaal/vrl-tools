@@ -5,6 +5,8 @@ import { DiagnosticRunner } from './diagnostics';
 import { registerLanguageFeatures } from './language';
 import { registerRun } from './run';
 import { SampleStore } from './sample';
+import { PipelineChoice } from './pipeline';
+import { registerSidebar } from './sidebar';
 import { StatusBar } from './status';
 import { EnrichmentTables } from './tables';
 import { registerTopology } from './topology';
@@ -56,8 +58,17 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(...registerRun(checker, samples, tables, output));
 
   // Vector configs, not .vrl files: the graph is the one thing here that
-  // works on a YAML or TOML document.
-  context.subscriptions.push(...registerTopology(checker, output, context.extensionUri));
+  // works on a YAML, TOML or JSON document.
+  // Shared by the graph and the sidebar, so a workspace with more than one
+  // pipeline in it never has the two showing different ones.
+  const choice = new PipelineChoice(context.workspaceState);
+  context.subscriptions.push(choice);
+
+  context.subscriptions.push(...registerTopology(checker, output, context.extensionUri, choice));
+
+  // And the way in that does not depend on which file is in front, which is
+  // usually the .vrl program rather than the config.
+  context.subscriptions.push(...registerSidebar(checker, output, choice));
 }
 
 export function deactivate(): void {

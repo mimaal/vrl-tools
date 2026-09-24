@@ -806,8 +806,17 @@
       count(of('source'), 'source', 'sources'),
       count(of('transform'), 'transform', 'transforms'),
       count(of('sink'), 'sink', 'sinks'),
+      // Named only when there are any: most pipelines have none, and a
+      // permanent "0 enrichment tables" is a word of noise on every one.
+      ...(of('table') > 0 ? [count(of('table'), 'enrichment table', 'enrichment tables')] : []),
       count(edges.length, 'connection', 'connections'),
     ].join(' · ');
+
+    // The legend names only the roles on screen, for the same reason.
+    const tableKey = document.querySelector('.legend .table');
+    if (tableKey instanceof HTMLElement) {
+      tableKey.hidden = of('table') === 0;
+    }
   }
 
   /** @param {any[]} findings */

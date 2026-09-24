@@ -1,0 +1,14 @@
+# `wildcard_matching = "relaxed"` is the config saying a pattern is allowed to
+# match nothing, so Vector starts on this and the graph must not call it an
+# error. Without the setting, `optional_*` is fatal.
+
+wildcard_matching = "relaxed"
+
+[sources.app_logs]
+type = "file"
+include = ["/var/log/app/*.log"]
+
+[sinks.out]
+type = "console"
+inputs = ["app_logs", "optional_*"]
+encoding.codec = "json"

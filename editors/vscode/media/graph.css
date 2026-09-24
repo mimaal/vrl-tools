@@ -8,6 +8,8 @@
   --source: var(--vscode-charts-green, #3fb950);
   --transform: var(--vscode-charts-blue, #4a9eff);
   --sink: var(--vscode-charts-purple, #b180d7);
+  /* An enrichment table: a destination, but one VRL reads back by name. */
+  --table: var(--vscode-charts-orange, #e2a03f);
   --error: var(--vscode-errorForeground, #f14c4c);
   --warning: var(--vscode-editorWarning-foreground, #cca700);
   --muted: var(--vscode-descriptionForeground, #8b949e);
@@ -82,6 +84,7 @@ header h1 {
 .legend .source::before { background: var(--source); }
 .legend .transform::before { background: var(--transform); }
 .legend .sink::before { background: var(--sink); }
+.legend .table::before { background: var(--table); }
 
 .spacer {
   flex: 1;
@@ -178,6 +181,7 @@ svg#canvas.panning {
 .node.source .accent { fill: var(--source); }
 .node.transform .accent { fill: var(--transform); }
 .node.sink .accent { fill: var(--sink); }
+.node.table .accent { fill: var(--table); }
 
 .node .role {
   font-size: 10px;
@@ -189,6 +193,7 @@ svg#canvas.panning {
 .node.source .role { fill: var(--source); }
 .node.transform .role { fill: var(--transform); }
 .node.sink .role { fill: var(--sink); }
+.node.table .role { fill: var(--table); }
 
 .node .id {
   fill: var(--vscode-editor-foreground);
@@ -433,6 +438,7 @@ svg.tracing .edge.on-path path {
 .mini-node.source { fill: var(--source); }
 .mini-node.transform { fill: var(--transform); }
 .mini-node.sink { fill: var(--sink); }
+.mini-node.table { fill: var(--table); }
 .mini-node.selected { opacity: 1; stroke: var(--vscode-editor-foreground); stroke-width: 12; }
 
 #mini-view {
@@ -487,6 +493,7 @@ svg.tracing .edge.on-path path {
 .chip.source { color: var(--source); }
 .chip.transform { color: var(--transform); }
 .chip.sink { color: var(--sink); }
+.chip.table { color: var(--table); }
 
 .issues { font-weight: 600; }
 .issues.error { color: var(--error); }

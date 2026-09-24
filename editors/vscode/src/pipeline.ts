@@ -2,6 +2,8 @@ import { promises as fs } from 'node:fs';
 
 import * as vscode from 'vscode';
 
+import { group } from './grouping';
+
 /**
  * Which files make up a Vector pipeline.
  *
@@ -21,8 +23,23 @@ import * as vscode from 'vscode';
  */
 export const PIPELINE_SETTING = 'vectorConfig';
 
-/** Every file a Vector config can be. */
-export const CONFIG_GLOB = '**/*.{yaml,yml,toml}';
+/**
+ * Every file a Vector config can be: the three formats Vector reads, which are
+ * also the three extensions `--config-dir` keeps.
+ */
+export const CONFIG_GLOB = '**/*.{yaml,yml,toml,json}';
+
+/**
+ * What is scanned when guessing which files are Vector's.
+ *
+ * JSON is deliberately left out of the *guess*, though not out of a pipeline:
+ * a repository has hundreds of JSON files that are nothing to do with Vector —
+ * lockfiles, tsconfigs, fixtures, source maps — and every one of them would be
+ * opened and read to find out. A JSON config is picked up when it is open, or
+ * when `vrl-tools.vectorConfig` names it, which is how anyone running Vector
+ * on one starts the process anyway.
+ */
+const GUESS_GLOB = '**/*.{yaml,yml,toml}';
 
 /** Where no Vector config lives, and where a scan would spend its time. */
 export const EXCLUDE_GLOB = '**/{node_modules,.git,target}/**';
@@ -31,11 +48,12 @@ export const EXCLUDE_GLOB = '**/{node_modules,.git,target}/**';
 const MAX_CANDIDATES = 2000;
 
 /**
- * A top-level section only a Vector config has, in either format: `sources:`
- * at the start of a YAML line, `[sources.x]` or `[sources]` in TOML.
+ * A top-level section only a Vector config has, in any of the formats:
+ * `sources:` at the start of a YAML line, `"sources":` in JSON, `[sources.x]`
+ * or `[sources]` in TOML.
  */
 const VECTOR_SECTION =
-  /^(?:(?:sources|transforms|sinks|enrichment_tables)\s*:|\[\s*(?:sources|transforms|sinks|enrichment_tables)\s*[.\]])/m;
+  /^(?:"?(?:sources|transforms|sinks|enrichment_tables)"?\s*:|\[\s*(?:sources|transforms|sinks|enrichment_tables)\s*[.\]])/m;
 
 export interface PipelineFile {
   readonly uri: vscode.Uri;
@@ -47,8 +65,19 @@ export interface PipelineFile {
 export interface Pipeline {
   /** What the pipeline is called in a title: the patterns, or the folder. */
   readonly title: string;
+  /** Stable enough to remember a choice by, across a reload. */
+  readonly key: string;
   readonly files: readonly PipelineFile[];
 }
+
+/**
+ * The component names one file declares, which is how the files found in a
+ * workspace are told apart into pipelines.
+ *
+ * Passed in rather than read here, so this file still knows nothing about the
+ * wasm module — it decides which files to hand over, and nothing else.
+ */
+export type ComponentNames = (file: PipelineFile) => readonly string[];
 
 /** The patterns configured for a workspace folder, if any. */
 export function configuredPatterns(folder: vscode.WorkspaceFolder): readonly string[] {
@@ -59,14 +88,21 @@ export function configuredPatterns(folder: vscode.WorkspaceFolder): readonly str
 }
 
 /**
- * The pipeline `document` belongs to. Just `document`, alone, when it is not
- * in a workspace folder or not among the files the setting names: a config
- * opened on its own is graphed on its own.
+ * The pipeline `document` belongs to: the one of [`discover`]'s that holds it.
+ *
+ * Just `document`, alone, when it is in none of them — which is every config
+ * whose first `sources:` is still being typed, and every file opened outside a
+ * workspace folder.
  */
-export async function pipelineOf(document: vscode.TextDocument): Promise<Pipeline> {
+export async function pipelineOf(
+  document: vscode.TextDocument,
+  namesOf: ComponentNames,
+): Promise<Pipeline> {
+  const name = nameOf(document.uri);
   const alone: Pipeline = {
-    title: nameOf(document.uri),
-    files: [{ uri: document.uri, name: nameOf(document.uri), source: document.getText() }],
+    title: name,
+    key: name,
+    files: [{ uri: document.uri, name, source: document.getText() }],
   };
 
   const folder = vscode.workspace.getWorkspaceFolder(document.uri);
@@ -74,21 +110,118 @@ export async function pipelineOf(document: vscode.TextDocument): Promise<Pipelin
     return alone;
   }
 
+  const pipelines = await discover(folder, namesOf);
+  return (
+    pipelines.find((pipeline) =>
+      pipeline.files.some((file) => sameFile(file.uri, document.uri)),
+    ) ?? alone
+  );
+}
+
+/** Every pipeline in the workspace, across all its folders. */
+export async function allPipelines(namesOf: ComponentNames): Promise<Pipeline[]> {
+  const all: Pipeline[] = [];
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    all.push(...(await discover(folder, namesOf)));
+  }
+  return all;
+}
+
+/**
+ * The pipeline to work from when nothing in the editor points at one: the
+ * chosen one, or the first there is.
+ *
+ * This is what lets the graph be opened from the sidebar with a `.vrl` file —
+ * or a README, or nothing at all — in front.
+ */
+export async function anyPipeline(
+  namesOf: ComponentNames,
+  preferred?: string,
+): Promise<Pipeline | undefined> {
+  const all = await allPipelines(namesOf);
+  return all.find((pipeline) => pipeline.key === preferred) ?? all[0];
+}
+
+/** One file of [`anyPipeline`], for a caller that needs a document to open. */
+export async function anyConfig(
+  namesOf: ComponentNames,
+  preferred?: string,
+): Promise<vscode.Uri | undefined> {
+  return (await anyPipeline(namesOf, preferred))?.files[0]?.uri;
+}
+
+/**
+ * Every pipeline in a workspace folder, not just the first.
+ *
+ * A workspace holds more than one often enough to matter: `config/prod` beside
+ * `config/staging`, a folder of examples, the test corpus of this very
+ * repository. Treating all of them as one pipeline is what the guess used to
+ * do, and what it produces is nonsense — forty-four "two components are called
+ * `app_logs`" errors and a picture of a topology nobody runs.
+ *
+ * How they are told apart is `./grouping.ts`; this decides which files to
+ * look at and reads them.
+ */
+export async function discover(
+  folder: vscode.WorkspaceFolder,
+  namesOf: ComponentNames,
+): Promise<Pipeline[]> {
+  // Configured patterns are not a guess: they are the files Vector is started
+  // with, so they are one pipeline whatever the names do.
   const patterns = configuredPatterns(folder);
   if (patterns.length > 0) {
-    const uris = await matching(folder, patterns);
-    return uris.some((uri) => sameFile(uri, document.uri))
-      ? { title: patterns.join(', '), files: await read(folder, uris) }
-      : alone;
+    const files = await read(folder, await matching(folder, patterns));
+    return files.length > 0 ? [{ title: patterns.join(', '), key: patterns.join(','), files }] : [];
   }
 
-  // Guessing, the open config is always part of it, even before its first
-  // section is written.
-  const uris = await guessed(folder);
-  if (!uris.some((uri) => sameFile(uri, document.uri))) {
-    uris.push(document.uri);
+  const files = await read(folder, await guessed(folder));
+  const names = new Map<string, readonly string[]>();
+  const namesCached: ComponentNames = (file) => {
+    const known = names.get(file.name);
+    if (known) {
+      return known;
+    }
+    const read = namesOf(file);
+    names.set(file.name, read);
+    return read;
+  };
+
+  return group(files, folder.name, namesCached).map((found) => ({
+    title: found.title,
+    key: found.key,
+    files: found.files,
+  }));
+}
+
+/**
+ * Which pipeline the sidebar and the graph are both looking at.
+ *
+ * One object shared by both, because a workspace with two pipelines in it and
+ * a sidebar and a graph disagreeing about which one is being shown would be
+ * worse than not letting you choose at all. Remembered per workspace, so the
+ * choice survives a reload.
+ */
+export class PipelineChoice implements vscode.Disposable {
+  private static readonly KEY = 'vrl-tools.pipeline';
+  private readonly emitter = new vscode.EventEmitter<void>();
+
+  readonly onDidChange = this.emitter.event;
+
+  constructor(private readonly state: vscode.Memento) {}
+
+  /** The chosen pipeline's key, or undefined for "whichever comes first". */
+  get key(): string | undefined {
+    return this.state.get<string>(PipelineChoice.KEY);
   }
-  return { title: folder.name, files: await read(folder, unique(uris)) };
+
+  set(key: string | undefined): void {
+    void this.state.update(PipelineChoice.KEY, key);
+    this.emitter.fire();
+  }
+
+  dispose(): void {
+    this.emitter.dispose();
+  }
 }
 
 /** Whether two URIs are one file. Windows drive letters differ in case between APIs. */
@@ -112,9 +245,9 @@ export async function matching(
 }
 
 /** Every YAML or TOML file in the folder that declares a Vector section. */
-async function guessed(folder: vscode.WorkspaceFolder): Promise<vscode.Uri[]> {
+export async function guessed(folder: vscode.WorkspaceFolder): Promise<vscode.Uri[]> {
   const candidates = await vscode.workspace.findFiles(
-    new vscode.RelativePattern(folder, CONFIG_GLOB),
+    new vscode.RelativePattern(folder, GUESS_GLOB),
     EXCLUDE_GLOB,
     MAX_CANDIDATES,
   );

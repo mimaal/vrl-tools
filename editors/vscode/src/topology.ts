@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 
 import type { Topology, VrlChecker, VrlRange } from './checker';
-import { CONFIG_GLOB, PIPELINE_SETTING, pipelineOf, sameFile } from './pipeline';
+import { anyConfig, CONFIG_GLOB, PIPELINE_SETTING, pipelineOf, sameFile } from './pipeline';
+import type { ComponentNames, PipelineChoice } from './pipeline';
 import type { Pipeline, PipelineFile } from './pipeline';
 
 /**
@@ -28,6 +29,8 @@ import type { Pipeline, PipelineFile } from './pipeline';
  */
 export const GRAPH_COMMAND = 'vrl-tools.showPipelineGraph';
 export const EXPORT_COMMAND = 'vrl-tools.exportPipelineGraph';
+/** Go to a component in the config and narrow the graph to it. */
+export const REVEAL_COMMAND = 'vrl-tools.revealComponent';
 
 /**
  * Set on the active editor when it holds a Vector config, which is what puts
@@ -40,7 +43,7 @@ const CONTEXT_KEY = 'vrl-tools.isVectorConfig';
 const SCHEME = 'vrl-graph';
 
 /** The file extensions a Vector config has. */
-const CONFIG_FILE = /\.(ya?ml|toml)$/i;
+const CONFIG_FILE = /\.(ya?ml|toml|json)$/i;
 
 /** How long to wait after a keystroke before redrawing. */
 const DEBOUNCE_MS = 250;
@@ -49,9 +52,10 @@ export function registerTopology(
   checker: VrlChecker,
   output: vscode.OutputChannel,
   extensionUri: vscode.Uri,
+  choice: PipelineChoice,
 ): vscode.Disposable[] {
   const exported = new GraphDocuments();
-  const panel = new GraphPanel(checker, output, extensionUri, (document) =>
+  const panel = new GraphPanel(checker, output, extensionUri, choice, (document) =>
     exportMarkdown(checker, exported, document),
   );
 
@@ -83,18 +87,31 @@ export function registerTopology(
         DEBOUNCE_MS,
       );
     }),
-    vscode.commands.registerCommand(GRAPH_COMMAND, () => {
-      const document = activeConfig();
+    vscode.commands.registerCommand(GRAPH_COMMAND, async (focus?: string) => {
+      const document = await configToGraph(panel, checker, choice);
       if (document) {
-        panel.show(document);
+        panel.show(document, typeof focus === 'string' ? focus : undefined);
       }
     }),
     vscode.commands.registerCommand(EXPORT_COMMAND, async () => {
-      const document = activeConfig() ?? panel.document;
+      const document = await configToGraph(panel, checker, choice);
       if (document) {
         await exportMarkdown(checker, exported, document);
       }
     }),
+    // What the sidebar's tree items run: go to the declaration and narrow the
+    // graph to that component's paths, which is the pair of things wanted on
+    // every click.
+    vscode.commands.registerCommand(
+      REVEAL_COMMAND,
+      async (target: { uri: vscode.Uri; range: VrlRange; id: string }) => {
+        const document = await configToGraph(panel, checker, choice);
+        if (document) {
+          panel.show(document, target.id);
+        }
+        await reveal(vscode.Uri.from(target.uri), target.range);
+      },
+    ),
   ];
 }
 
@@ -130,21 +147,103 @@ function configName(document: vscode.TextDocument): string | undefined {
   if (CONFIG_FILE.test(name)) {
     return name;
   }
-  if (document.languageId === 'yaml' || document.languageId === 'toml') {
+  if (['yaml', 'toml', 'json'].includes(document.languageId)) {
     return `${name}.${document.languageId}`;
   }
   return undefined;
 }
 
-function activeConfig(): vscode.TextDocument | undefined {
-  const editor = vscode.window.activeTextEditor;
-  if (!editor || !configName(editor.document)) {
+/**
+ * What each config file declares, which is how the workspace's files are told
+ * apart into pipelines. A file that does not parse declares nothing, which
+ * keeps a config mid-edit from splitting the pipeline it belongs to.
+ *
+ * Answers are kept, keyed by the file's own text, because this is asked of
+ * every config in the workspace every time either the graph or the sidebar
+ * redraws — twice per keystroke, once each, on a debounce. Typing in one
+ * config changes one file's text; the other seventeen answer from here instead
+ * of crossing into wasm and parsing again.
+ */
+const DECLARED = new Map<string, { source: string; names: readonly string[] }>();
+
+/** Enough for any workspace; a cache that grows without end is a leak. */
+const DECLARED_LIMIT = 512;
+
+export function componentNames(checker: VrlChecker): ComponentNames {
+  return (file) => {
+    const known = DECLARED.get(file.name);
+    if (known && known.source === file.source) {
+      return known.names;
+    }
+
+    let names: readonly string[] = [];
+    try {
+      const result = checker.topology(file.source, file.name);
+      names = 'error' in result ? [] : result.components.map((component) => component.id);
+    } catch {
+      names = [];
+    }
+
+    // Emptied rather than evicted one by one: this is a cache in front of a
+    // cheap answer, and the next few reads refilling it costs less than
+    // keeping an eviction order.
+    if (DECLARED.size >= DECLARED_LIMIT) {
+      DECLARED.clear();
+    }
+    DECLARED.set(file.name, { source: file.source, names });
+    return names;
+  };
+}
+
+/**
+ * The config to graph, which is deliberately not "the one in front".
+ *
+ * A pipeline is the same graph whichever of its files you ask from, and most
+ * of the time what is in front is the `.vrl` file whose transform you are
+ * writing — or a README, or nothing. So: the active editor when it is a
+ * config, the one the panel is already showing, and failing both, the first
+ * config in the workspace. Only a workspace with no Vector config at all has
+ * nothing to answer with, and that is the one case worth a message.
+ */
+async function configToGraph(
+  panel: GraphPanel,
+  checker: VrlChecker,
+  choice: PipelineChoice,
+): Promise<vscode.TextDocument | undefined> {
+  const active = vscode.window.activeTextEditor?.document;
+  if (active && configName(active)) {
+    return active;
+  }
+  if (panel.document) {
+    return panel.document;
+  }
+
+  const found = await anyConfig(componentNames(checker), choice.key);
+  if (!found) {
     void vscode.window.showWarningMessage(
-      'Open a Vector configuration — a .yaml or .toml file — to graph it.',
+      'No Vector configuration found in this workspace. Open one, or point `vrl-tools.vectorConfig` at the files you start Vector with.',
     );
     return undefined;
   }
-  return editor.document;
+  return vscode.workspace.openTextDocument(found);
+}
+
+/** Opens a config at a range, in the column it is already open in if it is. */
+async function reveal(uri: vscode.Uri, range: VrlRange): Promise<void> {
+  const target = new vscode.Range(
+    range.start.line,
+    range.start.character,
+    range.end.line,
+    range.end.character,
+  );
+  // Back in the column a config is already open in, rather than a new tab on
+  // top of the graph.
+  const visible = vscode.window.visibleTextEditors.find((e) => sameFile(e.document.uri, uri));
+  const editor = await vscode.window.showTextDocument(uri, {
+    viewColumn: visible?.viewColumn ?? vscode.ViewColumn.One,
+    selection: target,
+  });
+  editor.revealRange(target, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
 }
 
 /**
@@ -156,7 +255,7 @@ async function analyse(
   document: vscode.TextDocument,
   focus?: string,
 ): Promise<{ pipeline: Pipeline; analysis: Topology }> {
-  const pipeline = await pipelineOf(document);
+  const pipeline = await pipelineOf(document, componentNames(checker));
   const files = pipeline.files.map((file) => ({
     // The name picks the parser, so a file without a telling extension (an
     // untitled one) is named for its language instead.
@@ -227,6 +326,7 @@ class GraphPanel implements vscode.Disposable {
     private readonly checker: VrlChecker,
     private readonly output: vscode.OutputChannel,
     private readonly extensionUri: vscode.Uri,
+    private readonly choice: PipelineChoice,
     private readonly onExport: (document: vscode.TextDocument) => Promise<void>,
   ) {
     const watcher = vscode.workspace.createFileSystemWatcher(CONFIG_GLOB);
@@ -265,6 +365,17 @@ class GraphPanel implements vscode.Disposable {
           void this.post(true);
         }
       }),
+      // Another pipeline was picked in the sidebar: the panel follows, so the
+      // two never show different things.
+      this.choice.onDidChange(() => {
+        if (this.panel) {
+          this.shown = undefined;
+          this.files = [];
+          this.drawn = false;
+          this.focus = undefined;
+          void vscode.commands.executeCommand(GRAPH_COMMAND);
+        }
+      }),
     );
   }
 
@@ -283,20 +394,27 @@ class GraphPanel implements vscode.Disposable {
     );
   }
 
-  show(document: vscode.TextDocument): void {
+  /**
+   * Opens the panel on `document`'s pipeline, narrowed to `focus` when one is
+   * given. Asking for a component the graph is already showing just reveals
+   * the panel, so clicking twice in the sidebar does not redraw twice.
+   */
+  show(document: vscode.TextDocument, focus?: string): void {
     const changed =
       document !== this.shown && !this.files.some((file) => sameFile(file.uri, document.uri));
     this.shown = document;
 
     if (this.panel) {
       this.panel.reveal(vscode.ViewColumn.Beside, true);
-      if (changed) {
-        this.drawn = false;
-        this.focus = undefined;
+      if (changed || focus !== this.focus) {
+        this.drawn = this.drawn && !changed;
+        this.focus = focus;
         void this.post(true);
       }
       return;
     }
+
+    this.focus = focus;
 
     const media = vscode.Uri.joinPath(this.extensionUri, 'media');
     this.panel = vscode.window.createWebviewPanel(
@@ -336,7 +454,7 @@ class GraphPanel implements vscode.Disposable {
         break;
       case 'reveal': {
         const file = this.files[message.file];
-        void this.reveal(file ? file.uri : document.uri, message.range);
+        void reveal(file ? file.uri : document.uri, message.range);
         break;
       }
       case 'focus':
@@ -344,23 +462,6 @@ class GraphPanel implements vscode.Disposable {
         void this.post(true);
         break;
     }
-  }
-
-  private async reveal(uri: vscode.Uri, range: VrlRange): Promise<void> {
-    const target = new vscode.Range(
-      range.start.line,
-      range.start.character,
-      range.end.line,
-      range.end.character,
-    );
-    // Back in the column a config is already open in, rather than a new tab
-    // on top of the graph.
-    const visible = vscode.window.visibleTextEditors.find((e) => sameFile(e.document.uri, uri));
-    const editor = await vscode.window.showTextDocument(uri, {
-      viewColumn: visible?.viewColumn ?? vscode.ViewColumn.One,
-      selection: target,
-    });
-    editor.revealRange(target, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
   }
 
   private schedule(refit: boolean): void {
@@ -467,7 +568,7 @@ function html(webview: vscode.Webview, media: vscode.Uri): string {
       <g id="viewport"><g id="edges"></g><g id="labels"></g><g id="nodes"></g></g>
     </svg>
     <svg id="minimap" aria-hidden="true"></svg>
-    <div id="hint"><span class="legend"><span class="source">source</span><span class="transform">transform</span><span class="sink">sink</span></span><span>Scroll to move · Ctrl+scroll to zoom · Click a component to follow its paths</span></div>
+    <div id="hint"><span class="legend"><span class="source">source</span><span class="transform">transform</span><span class="sink">sink</span><span class="table">table</span></span><span>Scroll to move · Ctrl+scroll to zoom · Click a component to follow its paths</span></div>
     <div id="empty">No sources, transforms or sinks yet.<br>Components appear here as the config declares them.</div>
   </main>
   <div id="details" role="region" aria-label="Selected component"></div>

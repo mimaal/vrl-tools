@@ -19,14 +19,21 @@ language used by [Vector](https://vector.dev).
   compiler is pinned to. An enrichment lookup is checked the way `vector
   validate` checks it: the table it names has to be declared under
   `enrichment_tables` in one of the workspace's Vector configs.
-- **A graph of the pipeline.** Open a Vector config and a graph button appears
-  in the editor's title bar. It draws where events go — sources, transforms,
-  sinks — with named outputs such as a route's branches or a remap's `dropped`
-  on their arrows. Hover a component to light up every path through it.
-  Problems are marked where they are: an input naming nothing, a wildcard
-  matching nothing, a router read by its bare name, a component nobody reads,
-  a loop. The graph redraws as you edit, and exports as Markdown with a
-  Mermaid diagram to commit next to the config.
+- **A graph of the pipeline.** The Vector icon in the activity bar lists the
+  pipeline wherever you are in the project — sources, transforms, sinks,
+  enrichment tables, each with its outputs and its own problems — and any row
+  opens the graph narrowed to that component and jumps to where it is
+  declared. There is a graph button in the editor's title bar too, while a
+  config is the open file.
+
+  The graph draws where events go, with named outputs on their arrows: a
+  route's branches, a remap's `dropped`, an `opentelemetry` source's `logs`,
+  `metrics` and `traces`. Hover a component to light up every path through it.
+  Problems are marked where they are, and they are Vector's own: an input
+  naming nothing, a wildcard matching nothing, a router read by its bare name,
+  an output nobody reads, a transform with no inputs, an input named twice, a
+  name with a dot in it, a loop. The graph redraws as you edit, and exports as
+  Markdown with a Mermaid diagram to commit next to the config.
 
   Built for pipelines too big to read at a glance: the wheel scrolls and
   Ctrl+wheel zooms; `Ctrl+F` finds a component by name, type or file and
@@ -36,10 +43,16 @@ language used by [Vector](https://vector.dev).
   read, and a minimap shows where the view is. Double-click a component to
   open it in the config.
 
-  A pipeline split across several files is drawn whole. By default every
-  YAML or TOML file in the workspace that declares `sources`, `transforms`,
-  `sinks` or `enrichment_tables` is part of it; to match exactly what your
-  Vector loads, set `vrl-tools.vectorConfig` to the patterns you start it with:
+  A pipeline split across several files is drawn whole, and a workspace with
+  more than one pipeline in it keeps them apart. Which files go together is
+  decided the way Vector decides it: files whose component names collide
+  cannot be one config, so `config/prod` and `config/staging` are two
+  pipelines while `config/**/*.toml` stays one. When there is more than one,
+  the sidebar's first row says which you are looking at and lets you switch.
+
+  To match exactly what your Vector loads — or to include a `.json` config,
+  which is read but not searched for — set `vrl-tools.vectorConfig` to the
+  patterns you start it with:
 
   ```json
   "vrl-tools.vectorConfig": ["config/**/*.toml"]
@@ -100,6 +113,12 @@ deployment, so it is worth having on screen.
   reads them. The `--config-dir` layout where `sources/`, `transforms/` and
   `sinks/` subfolders hold one component per file, named by the file, is not
   read yet.
+- Which outputs a component has is read from its `type`, against a table taken
+  from Vector's source at the pinned release. A component type newer than that
+  table keeps the ordinary single output, so a named output it has grown will
+  be reported as naming nothing until the pin moves.
+- The graph does not typecheck edges. Vector also refuses a config where a
+  metrics output feeds a logs-only sink; that is left to `vector validate`.
 - Completion does not add the `!` of a fallible call for you. Asserting turns
   a handled error into an aborted program, and that is your decision to make.
 

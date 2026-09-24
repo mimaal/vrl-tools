@@ -1,0 +1,53 @@
+# Sources with named outputs, which the graph used to get backwards.
+#
+# An `opentelemetry` source always has `logs`, `metrics` and `traces` and no
+# default output, so `inputs: [otel]` is what Vector rejects and
+# `inputs: [otel.logs]` is what it accepts. A `datadog_agent` is one stream
+# until `multiple_outputs` splits it into four, minus whichever its `disable_*`
+# flags turn off.
+
+sources:
+  otel:
+    type: opentelemetry
+    grpc:
+      address: 0.0.0.0:4317
+    http:
+      address: 0.0.0.0:4318
+
+  dd:
+    type: datadog_agent
+    address: 0.0.0.0:8080
+    multiple_outputs: true
+    disable_llmobs: true
+
+transforms:
+  tag_logs:
+    type: remap
+    inputs:
+      - otel.logs
+      - dd.logs
+    source: |-
+      .ingested_by = "vector"
+
+sinks:
+  logs_out:
+    type: console
+    inputs:
+      - tag_logs
+    encoding:
+      codec: json
+
+  traces_out:
+    type: console
+    inputs:
+      - otel.traces
+      - dd.traces
+    encoding:
+      codec: json
+
+  metrics_out:
+    type: prometheus_exporter
+    inputs:
+      - otel.metrics
+      - dd.metrics
+    address: 0.0.0.0:9598

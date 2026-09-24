@@ -23,7 +23,8 @@
     "test:snippets": "tsx scripts/test-snippets.ts",
     "test:diagnostics": "tsx scripts/test-diagnostics.ts",
     "test:analysis": "tsx scripts/test-analysis.ts",
-    "test": "npm run test:grammar && npm run test:injection && npm run test:snippets && npm run test:diagnostics && npm run test:analysis",
+    "test:grouping": "tsx scripts/test-grouping.ts",
+    "test": "npm run test:grammar && npm run test:injection && npm run test:snippets && npm run test:diagnostics && npm run test:analysis && npm run test:grouping",
     "package": "npm run build && npm test && npm run package --workspace editors/vscode"
   },
   "devDependencies": {

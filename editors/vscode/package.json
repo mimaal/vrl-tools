@@ -37,7 +37,8 @@
     "onLanguage:vrl",
     "onLanguage:yaml",
     "onLanguage:toml",
-    "onLanguage:plaintext"
+    "onLanguage:plaintext",
+    "onView:vrl-tools.pipeline"
   ],
   "contributes": {
     "languages": [
@@ -91,14 +92,24 @@
         "command": "vrl-tools.showPipelineGraph",
         "title": "Show pipeline graph",
         "category": "VRL",
-        "icon": "$(type-hierarchy-sub)",
-        "enablement": "resourceExtname == .yaml || resourceExtname == .yml || resourceExtname == .toml || editorLangId == yaml || editorLangId == toml"
+        "icon": "$(type-hierarchy-sub)"
       },
       {
         "command": "vrl-tools.exportPipelineGraph",
         "title": "Export pipeline graph as Markdown",
         "category": "VRL",
-        "enablement": "resourceExtname == .yaml || resourceExtname == .yml || resourceExtname == .toml || editorLangId == yaml || editorLangId == toml"
+        "icon": "$(markdown)"
+      },
+      {
+        "command": "vrl-tools.revealComponent",
+        "title": "Go to component and follow its paths",
+        "category": "VRL"
+      },
+      {
+        "command": "vrl-tools.choosePipeline",
+        "title": "Choose pipeline",
+        "category": "VRL",
+        "icon": "$(list-selection)"
       }
     ],
     "menus": {
@@ -120,6 +131,29 @@
           "when": "vrl-tools.isVectorConfig",
           "group": "navigation"
         }
+      ],
+      "view/title": [
+        {
+          "command": "vrl-tools.choosePipeline",
+          "when": "view == vrl-tools.pipeline",
+          "group": "navigation@0"
+        },
+        {
+          "command": "vrl-tools.showPipelineGraph",
+          "when": "view == vrl-tools.pipeline",
+          "group": "navigation@1"
+        },
+        {
+          "command": "vrl-tools.exportPipelineGraph",
+          "when": "view == vrl-tools.pipeline",
+          "group": "navigation@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "vrl-tools.revealComponent",
+          "when": "false"
+        }
       ]
     },
     "configuration": {
@@ -140,7 +174,32 @@
           "markdownDescription": "The files your Vector reads its config from, as the patterns you pass to `vector --config`, relative to the workspace folder — for example `config/**/*.toml`. They are read as one pipeline: the graph draws all of them, and enrichment lookups are checked against the tables they declare. Left empty, every YAML or TOML file in the workspace that declares `sources`, `transforms`, `sinks` or `enrichment_tables` is used."
         }
       }
-    }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "vrl-tools",
+          "title": "Vector",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "vrl-tools": [
+        {
+          "id": "vrl-tools.pipeline",
+          "name": "Pipeline",
+          "icon": "media/activity.svg",
+          "contextualTitle": "Vector pipeline"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "vrl-tools.pipeline",
+        "contents": "No Vector configuration found in this folder.\n\nA file with a top-level `sources`, `transforms`, `sinks` or `enrichment_tables` section is picked up on its own. If yours live somewhere this guess does not reach, name the files you start Vector with:\n[Set vrl-tools.vectorConfig](command:workbench.action.openSettings?%22vrl-tools.vectorConfig%22)"
+      }
+    ]
   },
   "scripts": {
     "compile": "tsc -p .",
