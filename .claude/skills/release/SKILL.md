@@ -95,9 +95,14 @@ gh release view vX.Y.Z --json assets
 The Release job takes about seven minutes, most of it the wasm. Confirm the
 `.vsix` is attached before telling the user it is out.
 
-## The Marketplace
+## The two registries
 
-**The `.vsix` is uploaded by hand**, from
+**Open VSX is automatic.** `release.yml` publishes there on every tag, with the
+`OVSX_PAT` secret. Nothing to do; just check the step ran. The namespace
+(`miguel-martinez`, matching the manifest's `publisher`) was created once with
+`npx ovsx create-namespace`.
+
+**The Microsoft Marketplace is by hand**, from
 <https://marketplace.visualstudio.com/manage>. Tell the user this is the one
 step left to them; do not offer to automate it.
 

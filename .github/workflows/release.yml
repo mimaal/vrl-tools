@@ -44,7 +44,22 @@ jobs:
           name: vrl-tools-${{ steps.vsix.outputs.version }}.vsix
           path: ${{ steps.vsix.outputs.path }}
 
-      # Publishing
+      # Open VSX: the registry the forks read - VSCodium, Cursor, Windsurf,
+      # Gitpod, Theia. Unlike the Microsoft Marketplace below, this one is
+      # automated, because it can be: `ovsx` takes an ordinary access token,
+      # not an Azure DevOps global PAT with a retirement date on it.
+      #
+      # The namespace is created once, by hand, with
+      # `npx ovsx create-namespace miguel-martinez`; it has to match the
+      # manifest's `publisher`. This step only publishes, and skips itself
+      # where the secret is not set, so a fork's tag does not fail the release.
+      - name: Open VSX
+        if: startsWith(github.ref, 'refs/tags/') && secrets.OVSX_PAT != ''
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: npx ovsx publish "${{ steps.vsix.outputs.path }}" -p "$OVSX_PAT"
+
+      # Publishing to the Microsoft Marketplace
       #
       # This workflow deliberately stops at the GitHub release. The last step
       # - uploading the .vsix to the Marketplace - is done by hand from
