@@ -20,7 +20,7 @@ Everything must already be green on `main`:
 ```
 cargo test --workspace
 cargo clippy --workspace --all-targets     # zero warnings, not "few"
-npm test                                   # six suites
+npm test                                   # seven suites
 ```
 
 If the working tree is dirty with work that is not part of the release, stop
@@ -84,6 +84,32 @@ with the manifest produces a release nobody asked for.
 Push `main` before the tag, so the release is built from a commit that exists
 on the branch.
 
+### When the workflow fails before any job starts
+
+A run that fails in 0s with "This run likely failed because of a workflow file
+issue" never read the code: GitHub rejected the YAML. The one that has happened
+here: `secrets.X` in a step's `if:` is not allowed. Put a boolean in the job's
+`env` (`HAS_X: ${{ secrets.X != '' }}`) and test that; keep the secret itself
+in the `env` of the one step that uses it, never the job's, or every build
+script in the graph can read it.
+
+### Moving a tag
+
+If a run fails and **nothing was published from the tag** — no GitHub release,
+no registry — fix on `main` and move the tag rather than burning a version:
+
+```
+git push origin :refs/tags/vX.Y.Z
+git tag -d vX.Y.Z
+git tag -a vX.Y.Z -m "vX.Y.Z" <fixed commit>
+git push origin vX.Y.Z
+```
+
+Ask first: it rewrites a pushed ref. Once anything has been published from
+the tag, it is spent — bump the patch instead. `gh run rerun <id> --failed`
+re-runs the workflow *as it was at the tag*, so it only helps when the fix is
+outside the repository (a secret, a registry outage).
+
 ## 5. Watch it
 
 ```
@@ -98,7 +124,17 @@ The Release job takes about seven minutes, most of it the wasm. Confirm the
 ## The two registries
 
 **Open VSX is automatic.** `release.yml` publishes there on every tag, with the
-`OVSX_PAT` secret. Nothing to do; just check the step ran. The namespace
+`OVSX_PAT` secret, after the GitHub release — so a refused token costs the
+registry, not the release. Check the step's log says `🚀 Published`; the public
+API (`https://open-vsx.org/api/miguel-martinez/vrl-tools/latest`) lags it by
+a few minutes while Open VSX scans the upload, so an old version there right
+after is not a failure.
+
+`Invalid access token` means the stored value is wrong, not the account. An
+Open VSX token looks like `ovsxat_…` and the prefix is part of it. Tokens are
+shown once; replace it rather than diagnose it, with `gh secret set OVSX_PAT`
+typed interactively (the user runs it with `!`), so no trailing newline gets in
+and the token never enters the conversation. The namespace
 (`miguel-martinez`, matching the manifest's `publisher`) was created once with
 `npx ovsx create-namespace`.
 
