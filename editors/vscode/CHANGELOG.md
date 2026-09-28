@@ -4,7 +4,7 @@ Versions before 0.5.0 were never published; they exist as tags and as `.vsix`
 files built locally. They are listed here because the history explains what the
 extension is.
 
-## Unreleased
+## 0.7.1 — 2026-09-28
 
 Four ways the graph misread a real pipeline split across many files — one
 router, each product's file adding a route to it, a `base.toml` with indented
