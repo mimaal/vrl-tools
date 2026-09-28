@@ -4,7 +4,7 @@ Versions before 0.5.0 were never published; they exist as tags and as `.vsix`
 files built locally. They are listed here because the history explains what the
 extension is.
 
-## 0.7.2 — Unreleased
+## 0.7.2 — 2026-09-28
 
 After 0.7.1 the pipeline that exposed it drew right: 16 files, 26 components,
 54 edges, three findings, all three real. What was left were the things around
