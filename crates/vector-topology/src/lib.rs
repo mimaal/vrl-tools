@@ -15,6 +15,7 @@ pub mod graph;
 pub mod layout;
 pub mod outputs;
 pub mod render;
+mod vars;
 
 pub use config::{
     read_toml, read_toml_enrichment_tables, read_yaml, read_yaml_enrichment_tables, Component,
@@ -63,6 +64,16 @@ impl Format {
         match self {
             Self::Yaml | Self::Json => read_yaml(source),
             Self::Toml => read_toml(source),
+        }
+    }
+
+    /// [`Self::read`], stopping short of putting the components together, so
+    /// the pieces of one component in several files can be. See
+    /// [`config::assemble`].
+    fn entries(self, source: &str) -> Result<config::Entries, ConfigError> {
+        match self {
+            Self::Yaml | Self::Json => config::yaml_entries(source),
+            Self::Toml => config::toml_entries(source),
         }
     }
 }
@@ -137,7 +148,9 @@ pub fn analyse(source: &str, format: Format, title: &str) -> Result<Analysis, Co
 /// `config/**/*.toml`): each one is a complete config with its own
 /// `sources`, `transforms` and `sinks`, and the components of all of them are
 /// one topology. An input in one file can name a source in another, and a name
-/// used in two files is an error.
+/// declared in two files is an error — unless one of them only adds to a
+/// component the other declares, from the same directory, which is how
+/// `--config-dir` merges its files. See [`config::assemble`].
 ///
 /// A file that does not parse is listed in [`Analysis::unreadable`] and the
 /// rest are still read.
@@ -152,12 +165,13 @@ pub fn analyse_files(files: &[ConfigFile], title: &str) -> Analysis {
 /// where they were in the whole pipeline.
 #[must_use]
 pub fn analyse_files_focused(files: &[ConfigFile], title: &str, focus: Option<&str>) -> Analysis {
-    let mut whole = Document::default();
+    let mut entries = Vec::new();
+    let mut relaxed_wildcards = false;
     let mut unreadable = Vec::new();
 
     for (position, file) in files.iter().enumerate() {
         let read = match Format::of(&file.name) {
-            Some(format) => format.read(&file.source),
+            Some(format) => format.entries(&file.source),
             None => Err(ConfigError {
                 message: format!("{} is not a .yaml, .yml, .toml or .json file", file.name),
                 range: None,
@@ -165,15 +179,17 @@ pub fn analyse_files_focused(files: &[ConfigFile], title: &str, focus: Option<&s
         };
         match read {
             Ok(read) => {
-                whole.components.extend(read.components.into_iter().map(|mut component| {
-                    component.file = position;
-                    component
-                }));
+                let directory = directory(&file.name);
+                entries.extend(
+                    read.entries
+                        .into_iter()
+                        .map(|entry| entry.in_file(position, directory)),
+                );
                 // Vector merges the globals of every file it is given, so one
                 // file relaxing wildcard matching relaxes it for the pipeline.
                 // Erring towards relaxed keeps a setting this crate cannot see
                 // the whole of from inventing errors.
-                whole.relaxed_wildcards |= read.relaxed_wildcards;
+                relaxed_wildcards |= read.relaxed_wildcards;
             }
             Err(error) => unreadable.push(Unreadable {
                 file: position,
@@ -184,7 +200,10 @@ pub fn analyse_files_focused(files: &[ConfigFile], title: &str, focus: Option<&s
     }
 
     let names: Vec<String> = files.iter().map(|file| file.name.clone()).collect();
-    let whole = build(whole);
+    let whole = build(Document {
+        components: config::assemble(entries),
+        relaxed_wildcards,
+    });
     let (graph, focus) = match focus.and_then(|id| graph::focus(&whole, id).map(|g| (g, id))) {
         Some((narrowed, id)) => (narrowed, Some(id.to_owned())),
         None => (whole, None),
@@ -201,6 +220,12 @@ pub fn analyse_files_focused(files: &[ConfigFile], title: &str, focus: Option<&s
         unreadable,
         focus,
     }
+}
+
+/// The directory a file name is in, `""` at the top. Either separator, since
+/// the name comes from whoever calls.
+fn directory(name: &str) -> &str {
+    name.rfind(['/', '\\']).map_or("", |end| &name[..end])
 }
 
 /// [`analyse_files_focused`], taking and giving JSON: an array of
@@ -298,6 +323,147 @@ mod tests {
         let parse = analysis.components.iter().find(|c| c.id == "parse").expect("parse");
         assert_eq!(analysis.files[parse.file], "nginx/parse.toml");
         assert_eq!(analysis.edges[0].file, parse.file);
+    }
+
+    /// A router declared in one file, with each of the other files in the
+    /// directory adding its own route: `--config-dir` merges them into one
+    /// component, and so must the graph. Read as separate components, each
+    /// piece was a second `route_by_product` with no type, no inputs and no
+    /// outputs, and every route after the first vanished.
+    #[test]
+    fn a_component_written_across_files_of_one_directory_is_one_component() {
+        let analysis = analyse_files(
+            &[
+                file(
+                    "config/base.toml",
+                    "[sources.input]\ntype = \"http_server\"\n\n\
+                     [transforms.route_by_product]\ntype = \"exclusive_route\"\ninputs = [\"input\"]\n\n\
+                     [sinks.dead]\ntype = \"blackhole\"\ninputs = [\"route_by_product._unmatched\"]\n",
+                ),
+                file(
+                    "config/product_a.toml",
+                    "[[transforms.route_by_product.routes]]\nname = \"product_a\"\ncondition = \"true\"\n\n\
+                     [transforms.normalize_a]\ntype = \"remap\"\ninputs = [\"route_by_product.product_a\"]\nsource = \".\"\n",
+                ),
+                file(
+                    "config/product_b.toml",
+                    "[[transforms.route_by_product.routes]]\nname = \"product_b\"\ncondition = \"true\"\n\n\
+                     [transforms.normalize_b]\ntype = \"remap\"\ninputs = [\"route_by_product.product_b\"]\nsource = \".\"\n",
+                ),
+                file(
+                    "config/sinks.toml",
+                    "[sinks.out]\ntype = \"console\"\ninputs = [\"normalize_*\"]\nencoding.codec = \"json\"\n",
+                ),
+            ],
+            "config",
+        );
+
+        assert!(analysis.findings.is_empty(), "{:#?}", analysis.findings);
+        let router: Vec<_> = analysis
+            .components
+            .iter()
+            .filter(|c| c.id == "route_by_product")
+            .collect();
+        assert_eq!(router.len(), 1);
+        assert_eq!(router[0].component_type, "exclusive_route");
+        assert_eq!(router[0].named_outputs, ["product_a", "product_b", "_unmatched"]);
+        assert_eq!(analysis.files[router[0].file], "config/base.toml", "placed where it is declared");
+    }
+
+    /// Vector merges within one `--config-dir`, not across two: there the
+    /// piece is a component of its own, with no type, and a second name.
+    #[test]
+    fn pieces_in_another_directory_are_not_merged() {
+        let analysis = analyse_files(
+            &[
+                file(
+                    "a/base.toml",
+                    "[transforms.split]\ntype = \"exclusive_route\"\ninputs = [\"in\"]\n",
+                ),
+                file(
+                    "b/more.toml",
+                    "[[transforms.split.routes]]\nname = \"x\"\ncondition = \"true\"\n",
+                ),
+            ],
+            "config",
+        );
+
+        assert_eq!(analysis.components.iter().filter(|c| c.id == "split").count(), 2);
+        assert!(
+            analysis.findings.iter().any(|f| f.message.contains("2 components are called `split`")),
+            "{:#?}",
+            analysis.findings,
+        );
+    }
+
+    /// Two files that both say what a component is are two components, even
+    /// in one directory: that is what two unrelated configs side by side look
+    /// like, and what grouping splits a workspace by.
+    #[test]
+    fn two_declarations_in_one_directory_are_still_a_duplicate() {
+        let analysis = analyse_files(
+            &[
+                file("config/a.toml", "[sources.app]\ntype = \"file\"\n"),
+                file("config/b.toml", "[sources.app]\ntype = \"stdin\"\n"),
+            ],
+            "config",
+        );
+
+        assert_eq!(analysis.components.len(), 2);
+        assert!(analysis.findings.iter().any(|f| f.message.contains("called `app`")));
+    }
+
+    /// An input a piece adds is underlined in the piece's file, not in the
+    /// file that declares the component.
+    #[test]
+    fn an_input_added_by_a_piece_points_at_the_piece() {
+        let analysis = analyse_files(
+            &[
+                file("config/a.toml", "[sinks.out]\ntype = \"console\"\ninputs = []\n"),
+                file("config/b.toml", "[sinks.out]\ninputs = [\"nope\"]\n"),
+            ],
+            "config",
+        );
+
+        let dangling = analysis
+            .findings
+            .iter()
+            .find(|f| f.message.contains("`nope`"))
+            .expect("the input names nothing");
+        assert_eq!(analysis.files[dangling.file], "config/b.toml");
+        assert_eq!(dangling.range.start.line, 1);
+    }
+
+    /// Vector interpolates before it parses, so an unquoted variable is a
+    /// TOML value to it. Unread, the file lost every component it declares.
+    #[test]
+    fn an_unquoted_variable_does_not_make_a_file_unreadable() {
+        let source = "[sinks.out]\ntype = \"http\"\ninputs = [\"in\"]\nbuffer.type = \"disk\"\nbuffer.max_size = ${BUFFER_SIZE_BYTES}\n\n\
+                      [sources.in]\ntype = \"http_server\"\naddress = \"0.0.0.0:${PORT:-8080}\"\n";
+        let analysis = analyse_files(&[file("config/base.toml", source)], "config");
+
+        assert!(analysis.unreadable.is_empty(), "{:?}", analysis.unreadable);
+        assert_eq!(analysis.components.len(), 2);
+        assert!(analysis.findings.is_empty(), "{:#?}", analysis.findings);
+
+        // Positions are the file's as written, not the interpolated text's.
+        let source_line = source.lines().position(|l| l == "[sources.in]").unwrap();
+        let input = analysis.components.iter().find(|c| c.id == "in").unwrap();
+        assert_eq!(input.range.start.line as usize, source_line);
+    }
+
+    #[test]
+    fn a_variable_keeps_a_name_readable_on_both_ends_of_an_edge() {
+        let analysis = analyse_files(
+            &[file(
+                "vector.yaml",
+                "sources:\n  ${ENV}_app:\n    type: file\nsinks:\n  out:\n    type: console\n    inputs: [\"${ENV}_app\"]\n",
+            )],
+            "config",
+        );
+
+        assert!(analysis.findings.is_empty(), "{:#?}", analysis.findings);
+        assert_eq!(analysis.edges[0].from, "${ENV}_app");
     }
 
     #[test]

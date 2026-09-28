@@ -229,9 +229,11 @@
       // Ranges are per file, so two files can hold the same one.
       const owner = components.find(
         (c) =>
-          c.file === finding.file &&
-          (sameRange(c.range, finding.range) ||
-            c.inputs.some((/** @type {any} */ input) => sameRange(input.range, finding.range))),
+          (c.file === finding.file && sameRange(c.range, finding.range)) ||
+          c.inputs.some(
+            (/** @type {any} */ input) =>
+              input.file === finding.file && sameRange(input.range, finding.range),
+          ),
       );
       if (owner) {
         findingsOf.set(owner.id, [...(findingsOf.get(owner.id) ?? []), finding]);

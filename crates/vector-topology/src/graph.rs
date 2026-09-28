@@ -64,7 +64,7 @@ pub struct Edge {
     pub to: String,
     /// The `inputs` entry that declared this edge.
     pub range: Range,
-    /// The file `range` is in: the consumer's.
+    /// The file `range` is in: the input's, which is usually the consumer's.
     pub file: usize,
 }
 
@@ -142,7 +142,7 @@ pub fn build(document: Document) -> Graph {
                             consumer.id,
                         ),
                         range: input.range,
-                        file: consumer.file,
+                        file: input.file,
                     });
                     continue;
                 }
@@ -265,7 +265,7 @@ fn resolve(
                         input.text, consumer.id,
                     ),
                     range: input.range,
-                    file: consumer.file,
+                    file: input.file,
                 });
             }
             return;
@@ -277,7 +277,7 @@ fn resolve(
                 output: output.cloned(),
                 to: consumer.id.clone(),
                 range: input.range,
-                file: consumer.file,
+                file: input.file,
             });
         }
         return;
@@ -301,7 +301,7 @@ fn resolve(
                     output: Some(output.to_owned()),
                     to: consumer.id.clone(),
                     range: input.range,
-                    file: consumer.file,
+                    file: input.file,
                 });
             }
             Some(producer) => findings.push(Finding {
@@ -318,14 +318,14 @@ fn resolve(
                     )
                 },
                 range: input.range,
-                file: consumer.file,
+                file: input.file,
             }),
-            None => findings.push(dangling(&input.text, input.range, consumer.file)),
+            None => findings.push(dangling(&input.text, input.range, input.file)),
         }
         return;
     }
 
-    findings.push(dangling(&input.text, input.range, consumer.file));
+    findings.push(dangling(&input.text, input.range, input.file));
 }
 
 fn push_default_edge(
@@ -340,7 +340,7 @@ fn push_default_edge(
             severity: Severity::Error,
             message: format!("`{}` reads from itself", consumer.id),
             range: input.range,
-            file: consumer.file,
+            file: input.file,
         });
         return;
     }
@@ -361,7 +361,7 @@ fn push_default_edge(
                 }
             },
             range: input.range,
-            file: consumer.file,
+            file: input.file,
         });
         return;
     }
@@ -383,7 +383,7 @@ fn push_default_edge(
                     .join(", "),
             ),
             range: input.range,
-            file: consumer.file,
+            file: input.file,
         });
         return;
     }
@@ -393,7 +393,7 @@ fn push_default_edge(
         output: None,
         to: consumer.id.clone(),
         range: input.range,
-        file: consumer.file,
+        file: input.file,
     });
 }
 

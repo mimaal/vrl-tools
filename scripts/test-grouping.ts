@@ -12,7 +12,12 @@
  * Run with: npm run test:grouping
  */
 
-import { commonDirectory, group } from '../editors/vscode/src/grouping.js';
+import {
+  commonDirectory,
+  declaredNames,
+  declaresVectorSection,
+  group,
+} from '../editors/vscode/src/grouping.js';
 
 let failed = 0;
 
@@ -130,6 +135,80 @@ check(
     { title: 'examples/two.yaml', files: ['examples/two.yaml'] },
   ],
 );
+
+check(
+  // The shape that came apart into one pipeline per file: a directory of
+  // configs, with a subdirectory of its own that clashes with them. The files
+  // directly in `config` are one bucket, like any subdirectory.
+  'files directly in a directory stay together beside a clashing subdirectory',
+  grouped([
+    'config/base.toml: input set_defaults out',
+    'config/product_a.toml: normalize_a',
+    'config/product_b.toml: normalize_b',
+    'config/monitoring/vector.toml: input out',
+  ]),
+  [
+    {
+      title: 'config',
+      files: ['config/base.toml', 'config/product_a.toml', 'config/product_b.toml'],
+    },
+    { title: 'config/monitoring/vector.toml', files: ['config/monitoring/vector.toml'] },
+  ],
+);
+
+check(
+  'loose files that clash among themselves still come apart',
+  grouped(['config/a.yaml: app', 'config/b.yaml: app', 'config/sub/c.yaml: app']),
+  [
+    { title: 'config/a.yaml', files: ['config/a.yaml'] },
+    { title: 'config/b.yaml', files: ['config/b.yaml'] },
+    { title: 'config/sub/c.yaml', files: ['config/sub/c.yaml'] },
+  ],
+);
+
+// -------------------------------------------------------- what a file declares
+
+check(
+  // `[[transforms.route_by_product.routes]]` in each product's file, with the
+  // router declared once: the pieces have no type, and are not a clash.
+  'a piece of a component declared elsewhere is not a name the file declares',
+  declaredNames([
+    { id: 'route_by_product', type: '' },
+    { id: 'normalize_a', type: 'remap' },
+  ]),
+  ['normalize_a'],
+);
+
+check(
+  'pieces added from every file of a directory keep it one pipeline',
+  group(
+    [
+      { name: 'config/base.toml', components: [{ id: 'split', type: 'exclusive_route' }] },
+      { name: 'config/a.toml', components: [{ id: 'split', type: '' }, { id: 'a', type: 'remap' }] },
+      { name: 'config/b.toml', components: [{ id: 'split', type: '' }, { id: 'b', type: 'remap' }] },
+    ],
+    'workspace',
+    (f) => declaredNames(f.components),
+  ).map((g) => g.title),
+  ['config'],
+);
+
+// ------------------------------------------------------ which files are Vector's
+
+for (const [what, text, expected] of [
+  ['a YAML section', 'sources:\n  app:\n    type: file\n', true],
+  ['a TOML table', '[sources.app]\ntype = "file"\n', true],
+  ['a TOML section table', '[sinks]\n', true],
+  ['an indented TOML header', '# base\n  [sources.input-http]\n  type = "http_server"\n', true],
+  ['a TOML array of tables alone', '[[transforms.route_by_product.routes]]\nname = "a"\n', true],
+  ['an indented JSON key', '{\n  "sinks": {}\n}\n', true],
+  ['an enrichment table', 'enrichment_tables:\n  geo: {}\n', true],
+  ['a nested YAML key', 'customConfig:\n  sources:\n    app: {}\n', false],
+  ['an unrelated TOML file', '[package]\nname = "x"\n[dependencies]\n', false],
+  ['a word that only starts like a section', '[sourcesx]\nsinks_count = 1\n', false],
+] as const) {
+  check(`${expected ? 'is' : 'is not'} a Vector config: ${what}`, declaresVectorSection(text), expected);
+}
 
 // ------------------------------------------------------------------ the edges
 

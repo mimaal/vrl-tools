@@ -53,6 +53,19 @@ Free and open source. Full phased plan lives in @docs/PLAN.md.
   across files are errors, as in Vector's `check_shape`. The `--config-dir`
   subfolder layout (one component per file, named by the file) is not read yet.
 
+- Before parsing, a config's environment variables are interpolated with
+  Vector's syntax (`crates/vector-topology/src/vars.rs`, after
+  `src/config/vars.rs`). Values are never looked up — they live on Vector's
+  machine: a default is used, otherwise the written form is kept (quoted where
+  it is a bare TOML value). Spans map back to the file as written.
+
+- A component can be written in pieces across the files of one directory,
+  which `--config-dir` merges with `merge_values` (`load_from_dir`). The graph
+  merges them the same way (`config::assemble`), within a directory only.
+  What is a piece is decided by `type`: two entries that both have one stay
+  two components and a duplicate, and `grouping.ts` counts only typed names
+  (`declaredNames`) for the clash test.
+
 - Which outputs a component has is decided by its `type`, in
   `crates/vector-topology/src/outputs.rs`, and nothing else can decide it: an
   `opentelemetry` source is told from a `file` source by its type alone. The

@@ -142,7 +142,8 @@ export interface TopologyComponent {
   readonly id: string;
   readonly role: 'source' | 'transform' | 'sink' | 'table';
   readonly type: string;
-  readonly inputs: readonly { readonly text: string; readonly range: VrlRange }[];
+  /** `file` is usually the component's, but a piece of it written in another file adds its own. */
+  readonly inputs: readonly { readonly text: string; readonly range: VrlRange; readonly file: number }[];
   /** Where the component is declared, for going to it from the graph. */
   readonly range: VrlRange;
   /** The outputs it offers besides its default one: a route's routes, `dropped`, a source's ports. */

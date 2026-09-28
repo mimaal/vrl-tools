@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 
 import type { Topology, VrlChecker, VrlRange } from './checker';
+import { declaredNames } from './grouping';
 import { anyConfig, CONFIG_GLOB, PIPELINE_SETTING, pipelineOf, sameFile } from './pipeline';
 import type { ComponentNames, PipelineChoice } from './pipeline';
 import type { Pipeline, PipelineFile } from './pipeline';
@@ -156,7 +157,8 @@ function configName(document: vscode.TextDocument): string | undefined {
 /**
  * What each config file declares, which is how the workspace's files are told
  * apart into pipelines. A file that does not parse declares nothing, which
- * keeps a config mid-edit from splitting the pipeline it belongs to.
+ * keeps a config mid-edit from splitting the pipeline it belongs to; a piece
+ * of a component declared elsewhere does not count either (`declaredNames`).
  *
  * Answers are kept, keyed by the file's own text, because this is asked of
  * every config in the workspace every time either the graph or the sidebar
@@ -179,7 +181,7 @@ export function componentNames(checker: VrlChecker): ComponentNames {
     let names: readonly string[] = [];
     try {
       const result = checker.topology(file.source, file.name);
-      names = 'error' in result ? [] : result.components.map((component) => component.id);
+      names = 'error' in result ? [] : declaredNames(result.components);
     } catch {
       names = [];
     }

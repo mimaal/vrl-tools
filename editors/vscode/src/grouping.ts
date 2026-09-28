@@ -55,12 +55,17 @@ export function group<T extends Named>(
     return [named(base, files, fallback)];
   }
 
-  // Split by the next path segment below the directory they share.
+  // Split by the next directory below the one they share. The files directly
+  // in it are one bucket, not one each: they are as much one directory as any
+  // subdirectory is, and `--config 'config/*.toml'` is how most pipelines are
+  // started. Giving each its own bucket read a 16-file pipeline beside one
+  // subdirectory of examples as sixteen pipelines of one file.
   const buckets = new Map<string, T[]>();
   for (const file of files) {
     const rest = base ? file.name.slice(base.length + 1) : file.name;
-    const head = rest.includes('/') ? rest.slice(0, rest.indexOf('/')) : rest;
-    const key = base ? `${base}/${head}` : head;
+    const key = rest.includes('/')
+      ? (base ? `${base}/` : '') + rest.slice(0, rest.indexOf('/'))
+      : base;
     buckets.set(key, [...(buckets.get(key) ?? []), file]);
   }
 
@@ -87,6 +92,22 @@ function named<T extends Named>(base: string, files: readonly T[], fallback: str
     return { title: files[0].name, key: files[0].name, files };
   }
   return { title: base || fallback, key: base || '.', files };
+}
+
+/**
+ * The names a file declares, for [`group`]: those of the components it says
+ * the `type` of.
+ *
+ * A component without one is a piece of a component declared elsewhere —
+ * `[[transforms.split.routes]]` added from a file of its own, which
+ * `--config-dir` merges into the router — and a directory where every file
+ * adds one is the opposite of a clash. Counted, such a directory came apart
+ * into one pipeline per file.
+ */
+export function declaredNames(
+  components: readonly { readonly id: string; readonly type: string }[],
+): string[] {
+  return components.filter((component) => component.type !== '').map((component) => component.id);
 }
 
 /** Whether a component name is declared in more than one of these files. */
@@ -126,3 +147,26 @@ export function commonDirectory<T extends Named>(files: readonly T[]): string {
   }
   return common.join('/');
 }
+
+/**
+ * Whether a file's text declares a top-level section only a Vector config has:
+ * `sources`, `transforms`, `sinks` or `enrichment_tables`.
+ *
+ * - YAML: `sources:` at the start of a line. Only there — an indented one is a
+ *   key of something else, a Helm chart's `customConfig` for one.
+ * - JSON: `"sources":`, at any indentation, since every JSON key is indented.
+ * - TOML: `[sources.x]`, `[sources]` or `[[transforms.x.routes]]`, at any
+ *   indentation, because TOML allows whitespace before a header and configs
+ *   that nest their tables visually use it. The double bracket matters on its
+ *   own: a file that only adds routes to a router declared elsewhere has no
+ *   other header.
+ *
+ * Here rather than beside the file search so `npm run test:grouping` can
+ * exercise it: which files are Vector's is the input to everything else.
+ */
+export function declaresVectorSection(text: string): boolean {
+  return VECTOR_SECTION.test(text);
+}
+
+const VECTOR_SECTION =
+  /^(?:(?:sources|transforms|sinks|enrichment_tables)\s*:|[ \t]*"(?:sources|transforms|sinks|enrichment_tables)"\s*:|[ \t]*\[\[?[ \t]*(?:sources|transforms|sinks|enrichment_tables)[ \t]*[.\]])/m;

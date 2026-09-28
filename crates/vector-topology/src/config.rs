@@ -6,22 +6,29 @@
 //! graph, stated outright, which is why it can be read rather than inferred.
 //!
 //! Both formats land in the same [`Component`] list, so everything downstream
-//! is written once and neither knows nor cares which it came from. What a
-//! component's fields *mean* is [`crate::outputs`]'s, reached through the
-//! [`Fields`] trait both parsers implement, so the two cannot drift apart.
+//! is written once and neither knows nor cares which it came from. Each parser
+//! only converts a component's body into one [`Value`] tree; what its fields
+//! *mean* is [`crate::outputs`]'s, asked through the one [`Fields`]
+//! implementation that tree has, so the two formats cannot drift apart.
+//!
+//! Before either parser sees a file, its environment variables are
+//! interpolated, because that is what Vector does ([`crate::vars`]).
 //!
 //! Positions are kept from the start. A graph that cannot take you to the
 //! component you clicked is half a feature, and spans cannot be retrofitted
 //! through a serde round trip — which is why neither parser here is the serde
 //! one.
 
+use std::collections::HashMap;
+
 use editor_text::{LineIndex, Range};
 use saphyr::{LoadableYamlNode, MarkedYaml};
 
 use crate::outputs::{self, Fields};
+use crate::vars::{self, Interpolated, Syntax};
 
 /// Which of the four maps a component came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     Source,
@@ -69,6 +76,10 @@ impl Role {
 pub struct Input {
     pub text: String,
     pub range: Range,
+    /// The file `range` is in. Usually the component's, but not always: a
+    /// component split across files takes the `inputs` of every piece. See
+    /// [`assemble`].
+    pub file: usize,
 }
 
 /// A source, transform, sink or enrichment table.
@@ -95,7 +106,7 @@ pub struct Component {
     /// See [`crate::outputs`].
     pub default_output: bool,
     /// Which of the files being read declares it, as an index into the list
-    /// the caller gave. `range` and every input's range are in that file.
+    /// the caller gave. `range` is in that file.
     /// Always 0 when a single file is read.
     pub file: usize,
 }
@@ -143,6 +154,112 @@ const ENRICHMENT_TABLES: &str = "enrichment_tables";
 const WILDCARD_MATCHING: &str = "wildcard_matching";
 const RELAXED: &str = "relaxed";
 
+/// One component as one file writes it, before the files are put together.
+///
+/// A component is not always written in one place. Vector reads the files at
+/// the top of a `--config-dir` directory as one value, merging them key by key
+/// (`load_from_dir` and `merge_into_map`, `src/config/loading/`), so a file can
+/// add `[[transforms.split.routes]]` to a router another file declares. What a
+/// component is can only be said once every piece of it is in; [`assemble`]
+/// is where that happens.
+#[derive(Debug, Clone)]
+pub(crate) struct Entry {
+    role: Role,
+    id: String,
+    body: Value,
+    inputs: Vec<Input>,
+    range: Range,
+    file: usize,
+    /// The directory of the file it is in, which bounds what Vector merges.
+    directory: String,
+}
+
+impl Entry {
+    /// Places the entry in the `file`th file of a pipeline, under `directory`.
+    pub(crate) fn in_file(mut self, file: usize, directory: &str) -> Self {
+        self.file = file;
+        self.directory = directory.to_owned();
+        for input in &mut self.inputs {
+            input.file = file;
+        }
+        self
+    }
+
+    /// The name of an enrichment table, for the VRL compiler.
+    fn table(&self) -> Option<&str> {
+        (self.role == Role::Table).then_some(self.id.as_str())
+    }
+}
+
+/// A config file read as far as its entries, not yet merged with anything.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Entries {
+    pub(crate) entries: Vec<Entry>,
+    pub(crate) relaxed_wildcards: bool,
+}
+
+impl Entries {
+    fn into_document(self) -> Document {
+        Document {
+            components: assemble(self.entries),
+            relaxed_wildcards: self.relaxed_wildcards,
+        }
+    }
+}
+
+/// A component's body, whichever format it was written in.
+///
+/// Both parsers convert into this and nothing else answers [`Fields`], so the
+/// YAML and the TOML reader cannot disagree about what a field means — and a
+/// component written in two files can be merged the way Vector merges it,
+/// which needs the values, not the syntax trees of two different parsers.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Value {
+    Bool(bool),
+    Text(String),
+    List(Vec<Value>),
+    /// In the order the keys are written.
+    Map(Vec<(String, Value)>),
+    /// A number, a date, a null: nothing the graph reads.
+    Other,
+}
+
+impl Value {
+    fn get(&self, key: &str) -> Option<&Self> {
+        match self {
+            Self::Map(entries) => entries.iter().find(|(name, _)| name == key).map(|(_, v)| v),
+            _ => None,
+        }
+    }
+
+    /// Vector's `merge_values` (`src/config/loading/representation.rs`):
+    /// mappings merge key by key, lists are concatenated, and anything else is
+    /// replaced by the later value. Vector refuses two values of different
+    /// kinds at one key; here the later one wins, since the graph reads so
+    /// little of a component that the conflict is rarely in anything it shows.
+    fn merge(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Map(mut entries), Self::Map(other)) => {
+                for (key, value) in other {
+                    match entries.iter_mut().find(|(name, _)| *name == key) {
+                        Some(slot) => {
+                            let existing = std::mem::replace(&mut slot.1, Self::Other);
+                            slot.1 = existing.merge(value);
+                        }
+                        None => entries.push((key, value)),
+                    }
+                }
+                Self::Map(entries)
+            }
+            (Self::List(mut items), Self::List(other)) => {
+                items.extend(other);
+                Self::List(items)
+            }
+            (_, other) => other,
+        }
+    }
+}
+
 /// Reads a YAML Vector configuration.
 ///
 /// JSON is read by this too: Vector accepts `.json` configs, and YAML is a
@@ -151,9 +268,44 @@ const RELAXED: &str = "relaxed";
 /// # Errors
 /// When the document is not YAML.
 pub fn read_yaml(source: &str) -> Result<Document, ConfigError> {
-    let index = LineIndex::new(source);
+    yaml_entries(source).map(Entries::into_document)
+}
 
-    let documents = MarkedYaml::load_from_str(source).map_err(|error| ConfigError {
+/// Reads a TOML Vector configuration.
+///
+/// # Errors
+/// When the document is not TOML.
+pub fn read_toml(source: &str) -> Result<Document, ConfigError> {
+    toml_entries(source).map(Entries::into_document)
+}
+
+/// Offsets in the interpolated text, turned into positions in the file as
+/// written. See [`crate::vars`].
+struct Positions<'a> {
+    index: LineIndex<'a>,
+    text: &'a Interpolated,
+}
+
+impl<'a> Positions<'a> {
+    fn new(source: &'a str, text: &'a Interpolated) -> Self {
+        Self {
+            index: LineIndex::new(source),
+            text,
+        }
+    }
+
+    fn range(&self, span: std::ops::Range<usize>) -> Range {
+        self.index
+            .range(self.text.original(span.start)..self.text.original(span.end))
+    }
+}
+
+/// [`read_yaml`], as far as the entries.
+pub(crate) fn yaml_entries(source: &str) -> Result<Entries, ConfigError> {
+    let text = vars::interpolate(source, Syntax::Yaml);
+    let positions = Positions::new(source, &text);
+
+    let documents = MarkedYaml::load_from_str(&text.text).map_err(|error| ConfigError {
         message: error.to_string(),
         range: None,
     })?;
@@ -161,34 +313,34 @@ pub fn read_yaml(source: &str) -> Result<Document, ConfigError> {
     // An empty file is an empty config, not a failure. It is what every config
     // looks like for its first few seconds.
     let Some(root) = documents.first() else {
-        return Ok(Document::default());
+        return Ok(Entries::default());
     };
 
-    let mut components = Vec::new();
+    let mut entries = Vec::new();
     for role in Role::ALL {
         let Some(section) = root.data.as_mapping_get(role.section()) else {
             continue;
         };
-        let Some(entries) = section.data.as_mapping() else {
+        let Some(section) = section.data.as_mapping() else {
             continue;
         };
 
-        for (key, body) in entries {
+        for (key, body) in section {
             let Some(id) = key.data.as_str() else { continue };
-            let fields = YamlFields(body);
-            push(
-                &mut components,
-                id,
+            entries.push(Entry {
                 role,
-                &fields,
-                yaml_inputs(body, &index),
-                yaml_range(key, &index),
-            );
+                id: id.to_owned(),
+                body: yaml_value(body),
+                inputs: yaml_inputs(body, &positions),
+                range: yaml_range(key, &positions),
+                file: 0,
+                directory: String::new(),
+            });
         }
     }
 
-    Ok(Document {
-        components,
+    Ok(Entries {
+        entries,
         relaxed_wildcards: root
             .data
             .as_mapping_get(WILDCARD_MATCHING)
@@ -197,113 +349,30 @@ pub fn read_yaml(source: &str) -> Result<Document, ConfigError> {
     })
 }
 
-/// Adds a component and, when it has one, the source half of an enrichment
-/// table — a second component under its own name, which is the shape Vector
-/// compiles it into.
-///
-/// Its range is the table's, because that is where the name is written and so
-/// where clicking the node should land.
-fn push<F: Fields>(
-    components: &mut Vec<Component>,
-    id: &str,
-    role: Role,
-    fields: &F,
-    inputs: Vec<Input>,
-    range: Range,
-) {
-    let component_type = fields.text("type").unwrap_or_default();
-    let outputs = outputs::declared(role, &component_type, fields);
-
-    if role == Role::Table {
-        if let Some((source_key, source)) = outputs::table_source(&component_type, fields) {
-            components.push(Component {
-                id: source_key,
-                role,
-                component_type: component_type.clone(),
-                inputs: Vec::new(),
-                range,
-                named_outputs: source.named,
-                default_output: source.default,
-                file: 0,
-            });
-        }
-    }
-
-    components.push(Component {
-        id: id.to_owned(),
-        role,
-        component_type,
-        inputs,
-        range,
-        named_outputs: outputs.named,
-        default_output: outputs.default,
-        file: 0,
-    });
-}
-
-/// One component's fields, as saphyr holds them.
-#[derive(Clone, Copy)]
-struct YamlFields<'a, 'b>(&'a MarkedYaml<'b>);
-
-impl Fields for YamlFields<'_, '_> {
-    fn flag(&self, key: &str, default: bool) -> bool {
-        self.0
-            .data
-            .as_mapping_get(key)
-            .and_then(|node| node.data.as_bool())
-            .unwrap_or(default)
-    }
-
-    fn text(&self, key: &str) -> Option<String> {
-        self.0
-            .data
-            .as_mapping_get(key)
-            .and_then(|node| node.data.as_str())
-            .map(ToOwned::to_owned)
-    }
-
-    fn keys(&self, key: &str) -> Option<Vec<String>> {
-        let node = self.0.data.as_mapping_get(key)?;
-        Some(
-            node.data
-                .as_mapping()?
-                .keys()
-                .filter_map(|key| key.data.as_str().map(ToOwned::to_owned))
-                .collect(),
-        )
-    }
-
-    fn names(&self, key: &str) -> Option<Vec<String>> {
-        let node = self.0.data.as_mapping_get(key)?;
-        Some(
-            node.data
-                .as_sequence()?
+fn yaml_value(node: &MarkedYaml<'_>) -> Value {
+    if let Some(flag) = node.data.as_bool() {
+        Value::Bool(flag)
+    } else if let Some(text) = node.data.as_str() {
+        Value::Text(text.to_owned())
+    } else if let Some(items) = node.data.as_sequence() {
+        Value::List(items.iter().map(yaml_value).collect())
+    } else if let Some(entries) = node.data.as_mapping() {
+        Value::Map(
+            entries
                 .iter()
-                .filter_map(|entry| {
-                    entry
-                        .data
-                        .as_mapping_get("name")
-                        .and_then(|name| name.data.as_str())
-                        .map(ToOwned::to_owned)
-                })
+                .filter_map(|(key, value)| Some((key.data.as_str()?.to_owned(), yaml_value(value))))
                 .collect(),
         )
-    }
-
-    fn has(&self, key: &str) -> bool {
-        self.0.data.as_mapping_get(key).is_some()
-    }
-
-    fn child(&self, key: &str) -> Option<Self> {
-        self.0.data.as_mapping_get(key).map(YamlFields)
+    } else {
+        Value::Other
     }
 }
 
-fn yaml_range(node: &MarkedYaml<'_>, index: &LineIndex<'_>) -> Range {
-    index.range(node.span.start.index()..node.span.end.index())
+fn yaml_range(node: &MarkedYaml<'_>, positions: &Positions<'_>) -> Range {
+    positions.range(node.span.start.index()..node.span.end.index())
 }
 
-fn yaml_inputs(body: &MarkedYaml<'_>, index: &LineIndex<'_>) -> Vec<Input> {
+fn yaml_inputs(body: &MarkedYaml<'_>, positions: &Positions<'_>) -> Vec<Input> {
     let Some(node) = body.data.as_mapping_get("inputs") else {
         return Vec::new();
     };
@@ -313,7 +382,8 @@ fn yaml_inputs(body: &MarkedYaml<'_>, index: &LineIndex<'_>) -> Vec<Input> {
     if let Some(text) = node.data.as_str() {
         return vec![Input {
             text: text.to_owned(),
-            range: yaml_range(node, index),
+            range: yaml_range(node, positions),
+            file: 0,
         }];
     }
 
@@ -323,19 +393,18 @@ fn yaml_inputs(body: &MarkedYaml<'_>, index: &LineIndex<'_>) -> Vec<Input> {
             .filter_map(|entry| {
                 entry.data.as_str().map(|text| Input {
                     text: text.to_owned(),
-                    range: yaml_range(entry, index),
+                    range: yaml_range(entry, positions),
+                    file: 0,
                 })
             })
             .collect()
     })
 }
 
-/// Reads a TOML Vector configuration.
-///
-/// # Errors
-/// When the document is not TOML.
-pub fn read_toml(source: &str) -> Result<Document, ConfigError> {
-    let index = LineIndex::new(source);
+/// [`read_toml`], as far as the entries.
+pub(crate) fn toml_entries(source: &str) -> Result<Entries, ConfigError> {
+    let text = vars::interpolate(source, Syntax::Toml);
+    let positions = Positions::new(source, &text);
 
     // `Document`, not `DocumentMut`. The mutable document is the one built for
     // rewriting a file, and it drops every span on the way: ask it where a key
@@ -343,12 +412,12 @@ pub fn read_toml(source: &str) -> Result<Document, ConfigError> {
     // error. Nothing here edits anything, so the immutable parse is both the
     // honest choice and the only one that keeps the positions this crate
     // exists to carry.
-    let document = toml_edit::Document::parse(source).map_err(|error| ConfigError {
+    let document = toml_edit::Document::parse(text.text.as_str()).map_err(|error| ConfigError {
         message: error.message().to_owned(),
-        range: error.span().map(|span| index.range(span)),
+        range: error.span().map(|span| positions.range(span)),
     })?;
 
-    let mut components = Vec::new();
+    let mut entries = Vec::new();
     for role in Role::ALL {
         let Some(section) = document
             .get(role.section())
@@ -362,23 +431,23 @@ pub fn read_toml(source: &str) -> Result<Document, ConfigError> {
                 continue;
             };
 
-            let fields = TomlFields(table);
-            push(
-                &mut components,
-                id,
+            entries.push(Entry {
                 role,
-                &fields,
-                toml_inputs(table, &index),
-                section
+                id: id.to_owned(),
+                body: toml_value(body),
+                inputs: toml_inputs(table, &positions),
+                range: section
                     .key(id)
                     .and_then(toml_edit::Key::span)
-                    .map_or_else(Range::default, |span| index.range(span)),
-            );
+                    .map_or_else(Range::default, |span| positions.range(span)),
+                file: 0,
+                directory: String::new(),
+            });
         }
     }
 
-    Ok(Document {
-        components,
+    Ok(Entries {
+        entries,
         relaxed_wildcards: document
             .get(WILDCARD_MATCHING)
             .and_then(toml_edit::Item::as_str)
@@ -386,71 +455,62 @@ pub fn read_toml(source: &str) -> Result<Document, ConfigError> {
     })
 }
 
-/// One component's fields, as `toml_edit` holds them.
-#[derive(Clone, Copy)]
-struct TomlFields<'a>(&'a dyn toml_edit::TableLike);
-
-impl Fields for TomlFields<'_> {
-    fn flag(&self, key: &str, default: bool) -> bool {
-        self.0
-            .get(key)
-            .and_then(toml_edit::Item::as_bool)
-            .unwrap_or(default)
-    }
-
-    fn text(&self, key: &str) -> Option<String> {
-        self.0
-            .get(key)
-            .and_then(toml_edit::Item::as_str)
-            .map(ToOwned::to_owned)
-    }
-
-    fn keys(&self, key: &str) -> Option<Vec<String>> {
-        let table = self.0.get(key)?.as_table_like()?;
-        Some(table.iter().map(|(name, _)| name.to_owned()).collect())
-    }
-
-    /// `[[transforms.x.routes]]` tables, or an inline array of
-    /// `{ name = ..., condition = ... }`.
-    fn names(&self, key: &str) -> Option<Vec<String>> {
-        let item = self.0.get(key)?;
-        let name = |entry: &dyn toml_edit::TableLike| {
-            entry
-                .get("name")
-                .and_then(toml_edit::Item::as_str)
-                .map(ToOwned::to_owned)
-        };
-        if let Some(tables) = item.as_array_of_tables() {
-            return Some(tables.iter().filter_map(|table| name(table)).collect());
-        }
-        Some(
-            item.as_array()?
+/// `[[transforms.x.routes]]` tables and an inline array of
+/// `{ name = ..., condition = ... }` both come out as a list of maps.
+fn toml_value(item: &toml_edit::Item) -> Value {
+    match item {
+        toml_edit::Item::None => Value::Other,
+        toml_edit::Item::Value(value) => toml_inline(value),
+        toml_edit::Item::Table(table) => Value::Map(
+            table
                 .iter()
-                .filter_map(|value| value.as_inline_table().and_then(|table| name(table)))
+                .map(|(key, value)| (key.to_owned(), toml_value(value)))
                 .collect(),
-        )
-    }
-
-    fn has(&self, key: &str) -> bool {
-        self.0.get(key).is_some()
-    }
-
-    fn child(&self, key: &str) -> Option<Self> {
-        self.0.get(key).and_then(toml_edit::Item::as_table_like).map(TomlFields)
+        ),
+        toml_edit::Item::ArrayOfTables(tables) => Value::List(
+            tables
+                .iter()
+                .map(|table| {
+                    Value::Map(
+                        table
+                            .iter()
+                            .map(|(key, value)| (key.to_owned(), toml_value(value)))
+                            .collect(),
+                    )
+                })
+                .collect(),
+        ),
     }
 }
 
-fn toml_inputs(table: &dyn toml_edit::TableLike, index: &LineIndex<'_>) -> Vec<Input> {
+fn toml_inline(value: &toml_edit::Value) -> Value {
+    match value {
+        toml_edit::Value::String(text) => Value::Text(text.value().clone()),
+        toml_edit::Value::Boolean(flag) => Value::Bool(*flag.value()),
+        toml_edit::Value::Array(items) => Value::List(items.iter().map(toml_inline).collect()),
+        toml_edit::Value::InlineTable(table) => Value::Map(
+            table
+                .iter()
+                .map(|(key, value)| (key.to_owned(), toml_inline(value)))
+                .collect(),
+        ),
+        _ => Value::Other,
+    }
+}
+
+fn toml_inputs(table: &dyn toml_edit::TableLike, positions: &Positions<'_>) -> Vec<Input> {
     let Some(item) = table.get("inputs") else {
         return Vec::new();
+    };
+    let range = |span: Option<std::ops::Range<usize>>| {
+        span.map_or_else(Range::default, |span| positions.range(span))
     };
 
     if let Some(text) = item.as_str() {
         return vec![Input {
             text: text.to_owned(),
-            range: item
-                .span()
-                .map_or_else(Range::default, |span| index.range(span)),
+            range: range(item.span()),
+            file: 0,
         }];
     }
 
@@ -460,13 +520,191 @@ fn toml_inputs(table: &dyn toml_edit::TableLike, index: &LineIndex<'_>) -> Vec<I
             .filter_map(|entry| {
                 entry.as_str().map(|text| Input {
                     text: text.to_owned(),
-                    range: entry
-                        .span()
-                        .map_or_else(Range::default, |span| index.range(span)),
+                    range: range(entry.span()),
+                    file: 0,
                 })
             })
             .collect()
     })
+}
+
+/// Puts the entries of every file together into components.
+///
+/// Entries of one role and one name, in files of one directory, are one
+/// component written in pieces — the case Vector's `--config-dir` exists for,
+/// and the only one in which it accepts a piece that is not a whole component:
+/// given with `--config`, every file must stand alone, and a piece without a
+/// `type` fails to load. Beyond a directory nothing is merged, as in Vector,
+/// which `append`s each `--config-dir` to the others and refuses a name they
+/// share.
+///
+/// What is a piece is decided by `type`. One file declares the component and
+/// says what it is; the others only add to it. Two that both say what it is
+/// are two components with one name — which is what files from two unrelated
+/// pipelines look like, and what [`crate::graph`] reports. Vector itself,
+/// given them in one `--config-dir`, would quietly let the later one win; no
+/// one writes a config meaning that, and drawing it as one component would
+/// hide a mistake.
+///
+/// Pieces merge in the order the files were given, with Vector's
+/// [`Value::merge`], and the component is placed where its declaration is.
+#[must_use]
+pub(crate) fn assemble(entries: Vec<Entry>) -> Vec<Component> {
+    let mut groups: Vec<Vec<Entry>> = Vec::new();
+    let mut index: HashMap<(Role, String, String), usize> = HashMap::new();
+    for entry in entries {
+        let key = (entry.role, entry.id.clone(), entry.directory.clone());
+        match index.get(&key) {
+            Some(&group) => groups[group].push(entry),
+            None => {
+                index.insert(key, groups.len());
+                groups.push(vec![entry]);
+            }
+        }
+    }
+
+    let mut components = Vec::new();
+    for group in groups {
+        for entry in merge(group) {
+            push(&mut components, entry);
+        }
+    }
+    components
+}
+
+/// One group of [`assemble`]: every declaration stays itself, and the pieces
+/// join the first of them.
+fn merge(group: Vec<Entry>) -> Vec<Entry> {
+    if group.len() == 1 {
+        return group;
+    }
+
+    let (mut declared, pieces): (Vec<Entry>, Vec<Entry>) =
+        group.into_iter().partition(|entry| entry.body.get("type").is_some());
+    if pieces.is_empty() {
+        return declared;
+    }
+
+    // Nothing says what it is: the pieces are still one component, without a
+    // type, which is the finding to show rather than one per piece.
+    let anchor = if declared.is_empty() {
+        None
+    } else {
+        Some(declared.remove(0))
+    };
+    let (range, file) = anchor
+        .as_ref()
+        .or(pieces.first())
+        .map(|entry| (entry.range, entry.file))
+        .unwrap_or_default();
+
+    let mut all: Vec<Entry> = anchor.into_iter().chain(pieces).collect();
+    all.sort_by_key(|entry| entry.file);
+    let mut all = all.into_iter();
+    let Some(mut whole) = all.next() else {
+        return declared;
+    };
+    for piece in all {
+        whole.body = whole.body.merge(piece.body);
+        whole.inputs.extend(piece.inputs);
+    }
+    whole.range = range;
+    whole.file = file;
+
+    let mut merged = vec![whole];
+    merged.extend(declared);
+    merged
+}
+
+/// Adds a component and, when it has one, the source half of an enrichment
+/// table — a second component under its own name, which is the shape Vector
+/// compiles it into.
+///
+/// Its range is the table's, because that is where the name is written and so
+/// where clicking the node should land.
+fn push(components: &mut Vec<Component>, entry: Entry) {
+    let fields = Body(&entry.body);
+    let component_type = fields.text("type").unwrap_or_default();
+    let outputs = outputs::declared(entry.role, &component_type, &fields);
+
+    if entry.role == Role::Table {
+        if let Some((source_key, source)) = outputs::table_source(&component_type, &fields) {
+            components.push(Component {
+                id: source_key,
+                role: entry.role,
+                component_type: component_type.clone(),
+                inputs: Vec::new(),
+                range: entry.range,
+                named_outputs: source.named,
+                default_output: source.default,
+                file: entry.file,
+            });
+        }
+    }
+
+    components.push(Component {
+        id: entry.id,
+        role: entry.role,
+        component_type,
+        inputs: entry.inputs,
+        range: entry.range,
+        named_outputs: outputs.named,
+        default_output: outputs.default,
+        file: entry.file,
+    });
+}
+
+/// One component's fields, for [`crate::outputs`].
+#[derive(Clone, Copy)]
+struct Body<'a>(&'a Value);
+
+impl Fields for Body<'_> {
+    fn flag(&self, key: &str, default: bool) -> bool {
+        match self.0.get(key) {
+            Some(Value::Bool(flag)) => *flag,
+            _ => default,
+        }
+    }
+
+    fn text(&self, key: &str) -> Option<String> {
+        match self.0.get(key)? {
+            Value::Text(text) => Some(text.clone()),
+            _ => None,
+        }
+    }
+
+    fn keys(&self, key: &str) -> Option<Vec<String>> {
+        match self.0.get(key)? {
+            Value::Map(entries) => Some(entries.iter().map(|(name, _)| name.clone()).collect()),
+            _ => None,
+        }
+    }
+
+    fn names(&self, key: &str) -> Option<Vec<String>> {
+        match self.0.get(key)? {
+            Value::List(items) => Some(
+                items
+                    .iter()
+                    .filter_map(|item| match item.get("name") {
+                        Some(Value::Text(name)) => Some(name.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        }
+    }
+
+    fn has(&self, key: &str) -> bool {
+        self.0.get(key).is_some()
+    }
+
+    fn child(&self, key: &str) -> Option<Self> {
+        self.0
+            .get(key)
+            .filter(|value| matches!(value, Value::Map(_)))
+            .map(Body)
+    }
 }
 
 /// The names a YAML config declares under `enrichment_tables`.
@@ -478,22 +716,7 @@ fn toml_inputs(table: &dyn toml_edit::TableLike, index: &LineIndex<'_>) -> Vec<I
 /// # Errors
 /// When the document is not YAML.
 pub fn read_yaml_enrichment_tables(source: &str) -> Result<Vec<String>, ConfigError> {
-    let documents = MarkedYaml::load_from_str(source).map_err(|error| ConfigError {
-        message: error.to_string(),
-        range: None,
-    })?;
-
-    Ok(documents
-        .first()
-        .and_then(|root| root.data.as_mapping_get(ENRICHMENT_TABLES))
-        .and_then(|section| section.data.as_mapping())
-        .map(|entries| {
-            entries
-                .keys()
-                .filter_map(|key| key.data.as_str().map(ToOwned::to_owned))
-                .collect()
-        })
-        .unwrap_or_default())
+    Ok(tables(yaml_entries(source)?))
 }
 
 /// [`read_yaml_enrichment_tables`], for a TOML config.
@@ -501,17 +724,15 @@ pub fn read_yaml_enrichment_tables(source: &str) -> Result<Vec<String>, ConfigEr
 /// # Errors
 /// When the document is not TOML.
 pub fn read_toml_enrichment_tables(source: &str) -> Result<Vec<String>, ConfigError> {
-    let index = LineIndex::new(source);
-    let document = toml_edit::Document::parse(source).map_err(|error| ConfigError {
-        message: error.message().to_owned(),
-        range: error.span().map(|span| index.range(span)),
-    })?;
+    Ok(tables(toml_entries(source)?))
+}
 
-    Ok(document
-        .get(ENRICHMENT_TABLES)
-        .and_then(toml_edit::Item::as_table_like)
-        .map(|tables| tables.iter().map(|(name, _)| name.to_owned()).collect())
-        .unwrap_or_default())
+fn tables(read: Entries) -> Vec<String> {
+    read.entries
+        .iter()
+        .filter_map(Entry::table)
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 #[cfg(test)]

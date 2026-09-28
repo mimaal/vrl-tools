@@ -72,9 +72,10 @@ function attachFindings(analysis: Topology): Map<string, TopologyFinding[]> {
   for (const component of analysis.components) {
     const own = analysis.findings.filter(
       (finding) =>
-        finding.file === component.file &&
-        (covers(component.range, finding.range) ||
-          component.inputs.some((input) => covers(input.range, finding.range))),
+        (finding.file === component.file && covers(component.range, finding.range)) ||
+        component.inputs.some(
+          (input) => finding.file === input.file && covers(input.range, finding.range),
+        ),
     );
     if (own.length > 0) {
       byComponent.set(component.id, own);

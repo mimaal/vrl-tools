@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 
 import * as vscode from 'vscode';
 
-import { group } from './grouping';
+import { declaresVectorSection, group } from './grouping';
 
 /**
  * Which files make up a Vector pipeline.
@@ -46,14 +46,6 @@ export const EXCLUDE_GLOB = '**/{node_modules,.git,target}/**';
 
 /** A cap on the files looked at when guessing, for very large workspaces. */
 const MAX_CANDIDATES = 2000;
-
-/**
- * A top-level section only a Vector config has, in any of the formats:
- * `sources:` at the start of a YAML line, `"sources":` in JSON, `[sources.x]`
- * or `[sources]` in TOML.
- */
-const VECTOR_SECTION =
-  /^(?:"?(?:sources|transforms|sinks|enrichment_tables)"?\s*:|\[\s*(?:sources|transforms|sinks|enrichment_tables)\s*[.\]])/m;
 
 export interface PipelineFile {
   readonly uri: vscode.Uri;
@@ -252,7 +244,7 @@ export async function guessed(folder: vscode.WorkspaceFolder): Promise<vscode.Ur
     MAX_CANDIDATES,
   );
   const texts = await Promise.all(candidates.map((uri) => textOf(uri)));
-  return unique(candidates.filter((_, index) => VECTOR_SECTION.test(texts[index] ?? '')));
+  return unique(candidates.filter((_, index) => declaresVectorSection(texts[index] ?? '')));
 }
 
 async function read(folder: vscode.WorkspaceFolder, uris: readonly vscode.Uri[]): Promise<PipelineFile[]> {

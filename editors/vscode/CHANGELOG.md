@@ -4,6 +4,41 @@ Versions before 0.5.0 were never published; they exist as tags and as `.vsix`
 files built locally. They are listed here because the history explains what the
 extension is.
 
+## Unreleased
+
+Four ways the graph misread a real pipeline split across many files — one
+router, each product's file adding a route to it, a `base.toml` with indented
+tables and an unquoted variable, beside a subdirectory of its own. Of 69
+findings, 66 were the extension's; 418 files were read as 413 pipelines.
+
+- **A component written across files is one component.** Vector reads the
+  files at the top of a `--config-dir` directory as one value, merging them key
+  by key, so `[[transforms.route_by_product.routes]]` in each product's file
+  adds a route to the router `base.toml` declares. The graph read every such
+  piece as a second `route_by_product` with no type, no inputs and no outputs,
+  and every route but the first went missing — and with them every input that
+  named one. Pieces in one directory are now merged as Vector merges them
+  (maps key by key, lists concatenated). What is a piece is decided by `type`:
+  two files that both declare the component are still two components with one
+  name, which is what unrelated configs side by side look like.
+- **Environment variables are interpolated before parsing**, as Vector does.
+  `max_size = ${BUFFER_SIZE_BYTES}`, unquoted, is not TOML until the variable
+  is replaced, so the whole file was unreadable and its sources and sinks
+  disappeared from the graph. A `${VAR:-default}` takes its default; a variable
+  without one keeps its written form (quoted, where it is a bare TOML value),
+  since its value is on the machine Vector runs on. Positions still point at
+  the file as written.
+- **Files directly in a directory are one pipeline candidate, not one each.**
+  When a folder had to be split, every file at its top became a pipeline of its
+  own, so a 16-file pipeline beside one subdirectory came apart into sixteen.
+  They are now tried together, like any subdirectory, and split only if they
+  clash among themselves. A piece of a component (no `type`) is no longer
+  counted as a clash either.
+- **Indented TOML tables are recognised as a Vector config.** The guess only
+  looked for `[sources.x]` in column 0; TOML allows whitespace before a header,
+  and a file whose only header is `[[transforms.x.routes]]` was not recognised
+  at all.
+
 ## 0.7.0 — 2026-09-24
 
 The graph's model of a Vector topology was checked, component by component,
