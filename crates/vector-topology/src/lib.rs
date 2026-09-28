@@ -108,6 +108,13 @@ pub struct ConfigFile {
     /// the config directory reads best.
     pub name: String,
     pub source: String,
+    /// Whether Vector is given this file with `--config`, which loads it on
+    /// its own: nothing in it merges with another file. `false` for the files
+    /// of a `--config-dir`, whose top-level files Vector merges, and for files
+    /// whose loading is not known — merging is then the only reading in which
+    /// a file of pieces works at all. See [`config::assemble`].
+    #[serde(default)]
+    pub standalone: bool,
 }
 
 /// A file of a pipeline that did not parse.
@@ -144,13 +151,12 @@ pub fn analyse(source: &str, format: Format, title: &str) -> Result<Analysis, Co
 }
 
 /// Reads a pipeline split across several files, the way Vector reads the
-/// files given to it with `--config` (or a glob such as
-/// `config/**/*.toml`): each one is a complete config with its own
-/// `sources`, `transforms` and `sinks`, and the components of all of them are
-/// one topology. An input in one file can name a source in another, and a name
-/// declared in two files is an error — unless one of them only adds to a
-/// component the other declares, from the same directory, which is how
-/// `--config-dir` merges its files. See [`config::assemble`].
+/// files given to it with `--config` (or a glob such as `config/**/*.toml`)
+/// and `--config-dir`. The components of all of them are one topology: an
+/// input in one file can name a source in another, and a name declared in two
+/// files is an error — unless one of them only adds to a component the other
+/// declares, from the same directory, and neither is [`ConfigFile::standalone`],
+/// which is how `--config-dir` merges its files. See [`config::assemble`].
 ///
 /// A file that does not parse is listed in [`Analysis::unreadable`] and the
 /// rest are still read.
@@ -183,7 +189,7 @@ pub fn analyse_files_focused(files: &[ConfigFile], title: &str, focus: Option<&s
                 entries.extend(
                     read.entries
                         .into_iter()
-                        .map(|entry| entry.in_file(position, directory)),
+                        .map(|entry| entry.in_file(position, directory, file.standalone)),
                 );
                 // Vector merges the globals of every file it is given, so one
                 // file relaxing wildcard matching relaxes it for the pipeline.
@@ -200,9 +206,11 @@ pub fn analyse_files_focused(files: &[ConfigFile], title: &str, focus: Option<&s
     }
 
     let names: Vec<String> = files.iter().map(|file| file.name.clone()).collect();
+    let (components, findings) = config::assemble(entries);
     let whole = build(Document {
-        components: config::assemble(entries),
+        components,
         relaxed_wildcards,
+        findings,
     });
     let (graph, focus) = match focus.and_then(|id| graph::focus(&whole, id).map(|g| (g, id))) {
         Some((narrowed, id)) => (narrowed, Some(id.to_owned())),
@@ -299,6 +307,15 @@ mod tests {
         ConfigFile {
             name: name.to_owned(),
             source: source.to_owned(),
+            standalone: false,
+        }
+    }
+
+    /// A file given with `--config`.
+    fn alone(name: &str, source: &str) -> ConfigFile {
+        ConfigFile {
+            standalone: true,
+            ..file(name, source)
         }
     }
 
@@ -394,6 +411,74 @@ mod tests {
             "{:#?}",
             analysis.findings,
         );
+        let untyped = analysis
+            .findings
+            .iter()
+            .find(|f| f.message.contains("has no `type`"))
+            .expect("the piece is reported");
+        assert!(untyped.message.contains("another directory"), "{}", untyped.message);
+        assert_eq!(analysis.files[untyped.file], "b/more.toml");
+    }
+
+    /// Given with `--config`, every file is loaded on its own, so a piece is a
+    /// file Vector fails to load — even beside its declaration.
+    #[test]
+    fn pieces_given_with_config_are_not_merged() {
+        let analysis = analyse_files(
+            &[
+                alone(
+                    "config/base.toml",
+                    "[sources.in]
+type = \"stdin\"
+[transforms.split]
+type = \"exclusive_route\"
+inputs = [\"in\"]
+                     [[transforms.split.routes]]
+name = \"a\"
+condition = \"true\"
+                     [sinks.out]
+type = \"console\"
+inputs = [\"split.*\"]
+",
+                ),
+                alone(
+                    "config/more.toml",
+                    "[[transforms.split.routes]]
+name = \"b\"
+condition = \"true\"
+",
+                ),
+            ],
+            "config",
+        );
+
+        let router = analysis.components.iter().find(|c| c.file == 0 && c.id == "split").unwrap();
+        assert_eq!(router.named_outputs, ["a", "_unmatched"], "the piece's route is not added");
+        let untyped = analysis
+            .findings
+            .iter()
+            .find(|f| f.message.contains("has no `type`"))
+            .expect("the piece is reported");
+        assert!(untyped.message.contains("--config"), "{}", untyped.message);
+        assert_eq!(analysis.files[untyped.file], "config/more.toml");
+    }
+
+    #[test]
+    fn a_component_no_file_gives_a_type_says_so() {
+        let analysis = analyse_files(
+            &[file("vector.yaml", "sources:
+  app:
+    path: /var/log
+sinks:
+  out:
+    type: console
+    inputs: [app]
+")],
+            "config",
+        );
+
+        let messages: Vec<&str> = analysis.findings.iter().map(|f| f.message.as_str()).collect();
+        assert_eq!(messages, ["`app` has no `type`, and Vector needs one to know what it is"]);
     }
 
     /// Two files that both say what a component is are two components, even

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 
 import type { Topology, TopologyComponent, TopologyFinding, VrlChecker } from './checker';
-import { allPipelines, CONFIG_GLOB, PIPELINE_SETTING, sameFile } from './pipeline';
+import { affectsPipeline, allPipelines, CONFIG_GLOB, sameFile } from './pipeline';
 import type { Pipeline, PipelineChoice } from './pipeline';
 import { componentNames, REVEAL_COMMAND } from './topology';
 
@@ -111,7 +111,7 @@ export function registerSidebar(
       }
     }),
     vscode.workspace.onDidChangeConfiguration((event) => {
-      if (event.affectsConfiguration(`vrl-tools.${PIPELINE_SETTING}`)) {
+      if (affectsPipeline(event)) {
         provider.schedule();
       }
     }),
@@ -292,7 +292,11 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
         return undefined;
       }
       const analysis = this.checker.topologyFiles(
-        pipeline.files.map((file) => ({ name: file.name, source: file.source })),
+        pipeline.files.map((file) => ({
+          name: file.name,
+          source: file.source,
+          standalone: file.standalone,
+        })),
         pipeline.title,
       );
       return { pipeline, analysis, findingsOf: attachFindings(analysis) };

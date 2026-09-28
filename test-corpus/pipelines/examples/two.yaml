@@ -1,0 +1,11 @@
+sources:
+  app:
+    type: file
+    include: [/var/log/two/*.log]
+
+sinks:
+  console:
+    type: console
+    inputs: [app]
+    encoding:
+      codec: json

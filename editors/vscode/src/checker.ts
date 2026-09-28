@@ -312,7 +312,7 @@ export class VrlChecker {
    * and laid out on its own; a name that no longer exists shows everything.
    */
   topologyFiles(
-    files: readonly { name: string; source: string }[],
+    files: readonly { name: string; source: string; standalone: boolean }[],
     title: string,
     focus?: string,
   ): Topology {

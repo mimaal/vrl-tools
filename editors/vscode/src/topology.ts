@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 
 import type { Topology, VrlChecker, VrlRange } from './checker';
 import { declaredNames } from './grouping';
-import { anyConfig, CONFIG_GLOB, PIPELINE_SETTING, pipelineOf, sameFile } from './pipeline';
+import { affectsPipeline, anyConfig, CONFIG_GLOB, pipelineOf, sameFile } from './pipeline';
 import type { ComponentNames, PipelineChoice } from './pipeline';
 import type { Pipeline, PipelineFile } from './pipeline';
 
@@ -223,7 +223,7 @@ async function configToGraph(
   const found = await anyConfig(componentNames(checker), choice.key);
   if (!found) {
     void vscode.window.showWarningMessage(
-      'No Vector configuration found in this workspace. Open one, or point `vrl-tools.vectorConfig` at the files you start Vector with.',
+      'No Vector configuration found in this workspace. Open one, or point `vrl-tools.vectorConfig` (or `vrl-tools.vectorConfigDir`) at what you start Vector with.',
     );
     return undefined;
   }
@@ -263,6 +263,7 @@ async function analyse(
     // untitled one) is named for its language instead.
     name: sameFile(file.uri, document.uri) ? relativeConfigName(file.name, document) : file.name,
     source: file.source,
+    standalone: file.standalone,
   }));
   return { pipeline, analysis: checker.topologyFiles(files, pipeline.title, focus) };
 }
@@ -362,7 +363,7 @@ class GraphPanel implements vscode.Disposable {
         }
       }),
       vscode.workspace.onDidChangeConfiguration((event) => {
-        if (this.panel && event.affectsConfiguration(`vrl-tools.${PIPELINE_SETTING}`)) {
+        if (this.panel && affectsPipeline(event)) {
           this.drawn = false;
           void this.post(true);
         }

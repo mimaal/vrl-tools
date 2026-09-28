@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import * as vscode from 'vscode';
 
 import type { VrlChecker } from './checker';
-import { CONFIG_GLOB, configuredPatterns, EXCLUDE_GLOB, matching, PIPELINE_SETTING } from './pipeline';
+import { affectsPipeline, CONFIG_GLOB, configured, configuredFiles, EXCLUDE_GLOB } from './pipeline';
 
 /**
  * How many candidate files the first scan reads. A workspace with more YAML
@@ -64,7 +64,7 @@ export class EnrichmentTables implements vscode.Disposable {
       // so a table added and not yet saved is already usable.
       vscode.workspace.onDidChangeTextDocument((event) => this.readDocument(event.document)),
       vscode.workspace.onDidChangeConfiguration((event) => {
-        if (event.affectsConfiguration(`vrl-tools.${PIPELINE_SETTING}`)) {
+        if (affectsPipeline(event)) {
           this.byConfig.clear();
           void this.scan();
         }
@@ -83,9 +83,9 @@ export class EnrichmentTables implements vscode.Disposable {
     const files: vscode.Uri[] = [];
     this.allowed.clear();
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
-      const patterns = configuredPatterns(folder);
-      if (patterns.length > 0) {
-        const named = await matching(folder, patterns);
+      const config = configured(folder);
+      if (config) {
+        const named = (await configuredFiles(folder, config)).map((found) => found.uri);
         this.allowed.set(folder.uri.toString(), new Set(named.map(key)));
         files.push(...named);
       } else {

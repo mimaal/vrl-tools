@@ -1,0 +1,9 @@
+sources:
+  vector-metrics:
+    type: internal_metrics
+
+sinks:
+  out:
+    type: prometheus_exporter
+    inputs: [vector-metrics]
+    address: 0.0.0.0:9598

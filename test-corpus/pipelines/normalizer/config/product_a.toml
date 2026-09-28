@@ -1,0 +1,10 @@
+[[transforms.route_by_product.routes]]
+name = "product_a"
+condition = '.product == "a"'
+
+[transforms.normalize-a]
+type = "remap"
+inputs = ["route_by_product.product_a"]
+source = '''
+.source = "a"
+'''

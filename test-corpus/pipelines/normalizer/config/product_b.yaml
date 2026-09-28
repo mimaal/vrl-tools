@@ -1,0 +1,11 @@
+transforms:
+  route_by_product:
+    routes:
+      - name: product_b
+        condition: '.product == "b"'
+
+  normalize-b:
+    type: remap
+    inputs: [route_by_product.product_b]
+    source: |
+      .source = "b"

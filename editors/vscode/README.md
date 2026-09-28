@@ -52,11 +52,21 @@ language used by [Vector](https://vector.dev).
 
   To match exactly what your Vector loads — or to include a `.json` config,
   which is read but not searched for — set `vrl-tools.vectorConfig` to the
-  patterns you start it with:
+  patterns you pass to `--config`, and `vrl-tools.vectorConfigDir` to the
+  directories you pass to `--config-dir`:
 
   ```json
-  "vrl-tools.vectorConfig": ["config/**/*.toml"]
+  "vrl-tools.vectorConfig": ["config/**/*.toml"],
+  "vrl-tools.vectorConfigDir": ["conf.d"]
   ```
+
+  The difference matters when one component is written across files — a
+  router declared in one, each product's file adding a
+  `[[transforms.x.routes]]`. Vector merges the top-level files of a
+  `--config-dir` into one config, so that works there; a file given with
+  `--config` is loaded on its own, and a file that only adds to a component
+  fails. The graph reads each the way Vector would, and says which it is when
+  a piece has nowhere to go. Left to guess, it reads them as a directory.
 
   Clicking a component opens the file it is declared in, and a name used in
   two files is marked in both, as Vector would refuse it.

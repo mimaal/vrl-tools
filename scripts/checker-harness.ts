@@ -170,9 +170,12 @@ export function enrichmentTables(source: string, fileName: string): string[] | u
   return load().enrichment_tables(source, fileName);
 }
 
-/** Reads a pipeline split across files, each a complete config, as one topology. */
+/**
+ * Reads a pipeline split across files as one topology. `standalone` is a file
+ * given with `--config`, loaded on its own; see `vector_topology::ConfigFile`.
+ */
 export function topologyFiles(
-  files: readonly { name: string; source: string }[],
+  files: readonly { name: string; source: string; standalone?: boolean }[],
   title: string,
 ): Topology & { readonly files: readonly string[]; readonly unreadable: readonly unknown[] } {
   return JSON.parse(load().topology_files(JSON.stringify(files), title)) as Topology & {

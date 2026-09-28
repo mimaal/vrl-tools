@@ -1,0 +1,30 @@
+# Everything every product shares. Each product's file adds its own route to
+# `route_by_product` and the transform that reads it.
+
+  [sources.input-http]
+  type = "http_server"
+  address = "0.0.0.0:${HTTP_PORT:-8080}"
+  decoding.codec = "json"
+
+  [transforms.route_by_product]
+  type = "exclusive_route"
+  inputs = ["input-http"]
+
+  [transforms.set-defaults]
+  type = "remap"
+  inputs = ["normalize-*"]
+  source = '''
+  .environment = "production"
+  '''
+
+  [sinks.out]
+  type = "http"
+  inputs = ["set-defaults"]
+  uri = "https://collector.example.com/ingest"
+  encoding.codec = "json"
+  buffer.type = "disk"
+  buffer.max_size = ${BUFFER_SIZE_BYTES}
+
+  [sinks.unrouted]
+  type = "blackhole"
+  inputs = ["route_by_product._unmatched"]

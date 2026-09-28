@@ -43,14 +43,16 @@ Free and open source. Full phased plan lives in @docs/PLAN.md.
 
 - The pipeline graph reads a pipeline, not a file: the files Vector is given
   with `--config`, each a complete config, joined (`analyse_files` in
-  `crates/vector-topology`). Which files is `vrl-tools.vectorConfig`, the same
-  patterns Vector is started with; left empty, every YAML/TOML file in the
+  `crates/vector-topology`). Which files is `vrl-tools.vectorConfig` (the
+  `--config` patterns) and `vrl-tools.vectorConfigDir` (the `--config-dir`
+  directories), the same arguments Vector is started with; both left empty, every YAML/TOML file in the
   workspace folder with a top-level Vector section. JSON is a Vector config
   format too and is read (by the YAML parser — YAML is a superset of JSON, and
   it keeps the spans), but it is deliberately left out of the *guess*: a repo
   has hundreds of JSON files that are not configs and every one would be read
   to find out. Enrichment tables come from the same files. Duplicate names
-  across files are errors, as in Vector's `check_shape`. The `--config-dir`
+  across files are errors, as in Vector's `check_shape` — except the untyped
+  pieces of one component in one directory, which are merged (below). The `--config-dir`
   subfolder layout (one component per file, named by the file) is not read yet.
 
 - Before parsing, a config's environment variables are interpolated with
@@ -64,7 +66,11 @@ Free and open source. Full phased plan lives in @docs/PLAN.md.
   merges them the same way (`config::assemble`), within a directory only.
   What is a piece is decided by `type`: two entries that both have one stay
   two components and a duplicate, and `grouping.ts` counts only typed names
-  (`declaredNames`) for the clash test.
+  (`declaredNames`) for the clash test. A file from `vectorConfig` is
+  `standalone` (`--config` loads each file on its own) and merges with
+  nothing; guessed files merge, since that is the only reading in which a file
+  of pieces works at all. Anything left without a `type` is a finding that
+  says which of the three reasons applies (`config::untyped`).
 
 - Which outputs a component has is decided by its `type`, in
   `crates/vector-topology/src/outputs.rs`, and nothing else can decide it: an
@@ -240,7 +246,7 @@ Free and open source. Full phased plan lives in @docs/PLAN.md.
 ## Verification
 
 - `cargo test` across the workspace before closing out a phase.
-- `npm test` runs six suites; `test:snippets` compiles every expansion and
+- `npm test` runs seven suites; `test:snippets` compiles every expansion and
   `test:diagnostics` compiles the corpus, including every block the injection
   grammars paint as VRL inside a Vector config. Anything this repo shows as
   valid VRL has to be accepted by the pinned compiler. `test:analysis` covers
@@ -249,6 +255,9 @@ Free and open source. Full phased plan lives in @docs/PLAN.md.
   valid" — and is therefore the only one the compiler cannot keep honest.
   `test:grouping` covers `editors/vscode/src/grouping.ts` for the same reason:
   no amount of compiling VRL says whether two folders are one pipeline.
+  `test:pipelines` walks `test-corpus/pipelines/` from the disk through the
+  guess, the grouping and the wasm reading, which is the path none of the
+  others is handed a folder to test.
 - **Test the path that finds the input, not only the path that takes it.**
   Every topology test passed its files explicitly, so the code that decides
   *which* files are a pipeline had no test at all — and read an entire

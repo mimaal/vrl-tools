@@ -171,7 +171,16 @@
           },
           "default": [],
           "scope": "resource",
-          "markdownDescription": "The files your Vector reads its config from, as the patterns you pass to `vector --config`, relative to the workspace folder — for example `config/**/*.toml`. They are read as one pipeline: the graph draws all of them, and enrichment lookups are checked against the tables they declare. Left empty, every YAML or TOML file in the workspace that declares `sources`, `transforms`, `sinks` or `enrichment_tables` is used."
+          "markdownDescription": "The files your Vector reads its config from, as the patterns you pass to `vector --config`, relative to the workspace folder — for example `config/**/*.toml`. They are read as one pipeline: the graph draws all of them, and enrichment lookups are checked against the tables they declare. Each is loaded on its own, as `--config` does, so a file that only adds to a component declared in another (a `[[transforms.x.routes]]` with no `type`) is an error; if that is how your config is written, Vector is started with `--config-dir` and `#vrl-tools.vectorConfigDir#` is the setting. Left empty with that one, every YAML or TOML file in the workspace that declares `sources`, `transforms`, `sinks` or `enrichment_tables` is used."
+        },
+        "vrl-tools.vectorConfigDir": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "resource",
+          "markdownDescription": "The directories your Vector reads its config from, as you pass them to `vector --config-dir`, relative to the workspace folder — for example `config`. The YAML, TOML and JSON files directly in each are merged into one config, as Vector merges them, so one component can be written across files: a router in one, each route added from its own. Read together with `#vrl-tools.vectorConfig#` as one pipeline. The `sources/`, `transforms/`… subfolders of a config directory are not read yet."
         }
       }
     },

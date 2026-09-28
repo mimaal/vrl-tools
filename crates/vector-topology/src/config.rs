@@ -19,11 +19,12 @@
 //! through a serde round trip — which is why neither parser here is the serde
 //! one.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use editor_text::{LineIndex, Range};
 use saphyr::{LoadableYamlNode, MarkedYaml};
 
+use crate::graph::{Finding, Severity};
 use crate::outputs::{self, Fields};
 use crate::vars::{self, Interpolated, Syntax};
 
@@ -137,6 +138,9 @@ pub struct Document {
     /// The global `wildcard_matching: relaxed`, which makes an input pattern
     /// matching nothing legal instead of fatal. See [`crate::graph`].
     pub relaxed_wildcards: bool,
+    /// What is wrong with a component that only shows once the files are put
+    /// together — a piece with no declaration to join. See [`assemble`].
+    pub findings: Vec<Finding>,
 }
 
 /// Why a config could not be read at all.
@@ -172,13 +176,17 @@ pub(crate) struct Entry {
     file: usize,
     /// The directory of the file it is in, which bounds what Vector merges.
     directory: String,
+    /// Whether the file was given to Vector with `--config`, which loads each
+    /// file on its own and merges nothing. See [`crate::ConfigFile`].
+    standalone: bool,
 }
 
 impl Entry {
     /// Places the entry in the `file`th file of a pipeline, under `directory`.
-    pub(crate) fn in_file(mut self, file: usize, directory: &str) -> Self {
+    pub(crate) fn in_file(mut self, file: usize, directory: &str, standalone: bool) -> Self {
         self.file = file;
         self.directory = directory.to_owned();
+        self.standalone = standalone;
         for input in &mut self.inputs {
             input.file = file;
         }
@@ -188,6 +196,12 @@ impl Entry {
     /// The name of an enrichment table, for the VRL compiler.
     fn table(&self) -> Option<&str> {
         (self.role == Role::Table).then_some(self.id.as_str())
+    }
+
+    /// Whether the entry says what the component is, rather than adding to
+    /// one declared elsewhere.
+    fn declares(&self) -> bool {
+        self.body.get("type").is_some()
     }
 }
 
@@ -200,9 +214,11 @@ pub(crate) struct Entries {
 
 impl Entries {
     fn into_document(self) -> Document {
+        let (components, findings) = assemble(self.entries);
         Document {
-            components: assemble(self.entries),
+            components,
             relaxed_wildcards: self.relaxed_wildcards,
+            findings,
         }
     }
 }
@@ -335,6 +351,7 @@ pub(crate) fn yaml_entries(source: &str) -> Result<Entries, ConfigError> {
                 range: yaml_range(key, &positions),
                 file: 0,
                 directory: String::new(),
+                standalone: false,
             });
         }
     }
@@ -442,6 +459,7 @@ pub(crate) fn toml_entries(source: &str) -> Result<Entries, ConfigError> {
                     .map_or_else(Range::default, |span| positions.range(span)),
                 file: 0,
                 directory: String::new(),
+                standalone: false,
             });
         }
     }
@@ -548,12 +566,28 @@ fn toml_inputs(table: &dyn toml_edit::TableLike, positions: &Positions<'_>) -> V
 ///
 /// Pieces merge in the order the files were given, with Vector's
 /// [`Value::merge`], and the component is placed where its declaration is.
+/// A file given with `--config` merges with nothing.
+///
+/// Whatever is left without a `type` once that is done is a finding, and the
+/// finding says why, because "has no type" alone is baffling about a file
+/// that was only ever meant to add a route: see [`untyped`].
 #[must_use]
-pub(crate) fn assemble(entries: Vec<Entry>) -> Vec<Component> {
+pub(crate) fn assemble(entries: Vec<Entry>) -> (Vec<Component>, Vec<Finding>) {
+    let declared: HashSet<(Role, String)> = entries
+        .iter()
+        .filter(|entry| entry.declares())
+        .map(|entry| (entry.role, entry.id.clone()))
+        .collect();
+
     let mut groups: Vec<Vec<Entry>> = Vec::new();
-    let mut index: HashMap<(Role, String, String), usize> = HashMap::new();
+    let mut index: HashMap<(Role, String, String, Option<usize>), usize> = HashMap::new();
     for entry in entries {
-        let key = (entry.role, entry.id.clone(), entry.directory.clone());
+        let key = (
+            entry.role,
+            entry.id.clone(),
+            entry.directory.clone(),
+            entry.standalone.then_some(entry.file),
+        );
         match index.get(&key) {
             Some(&group) => groups[group].push(entry),
             None => {
@@ -564,12 +598,44 @@ pub(crate) fn assemble(entries: Vec<Entry>) -> Vec<Component> {
     }
 
     let mut components = Vec::new();
+    let mut findings = Vec::new();
     for group in groups {
         for entry in merge(group) {
+            if !entry.declares() {
+                let elsewhere = declared.contains(&(entry.role, entry.id.clone()));
+                findings.push(untyped(&entry, elsewhere));
+            }
             push(&mut components, entry);
         }
     }
-    components
+    (components, findings)
+}
+
+/// A component nothing says the `type` of, with the reason that applies.
+///
+/// Vector refuses it either way — the component cannot be deserialised without
+/// one — but the fix differs. When a `type` exists in another file, the file
+/// was written as a piece and the question is how Vector was given the files;
+/// when none does, the `type` is simply missing.
+fn untyped(entry: &Entry, declared_elsewhere: bool) -> Finding {
+    let id = &entry.id;
+    let message = if !declared_elsewhere {
+        format!("`{id}` has no `type`, and Vector needs one to know what it is")
+    } else if entry.standalone {
+        format!(
+            "`{id}` has no `type`: this adds to a `{id}` declared in another file, but a file given              with `--config` is loaded on its own. Only the files of one `--config-dir` are merged",
+        )
+    } else {
+        format!(
+            "`{id}` has no `type`: this adds to a `{id}` declared in another directory, and Vector              merges the pieces of a component only within one `--config-dir`",
+        )
+    };
+    Finding {
+        severity: Severity::Error,
+        message,
+        range: entry.range,
+        file: entry.file,
+    }
 }
 
 /// One group of [`assemble`]: every declaration stays itself, and the pieces
@@ -580,7 +646,7 @@ fn merge(group: Vec<Entry>) -> Vec<Entry> {
     }
 
     let (mut declared, pieces): (Vec<Entry>, Vec<Entry>) =
-        group.into_iter().partition(|entry| entry.body.get("type").is_some());
+        group.into_iter().partition(Entry::declares);
     if pieces.is_empty() {
         return declared;
     }

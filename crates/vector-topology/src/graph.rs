@@ -83,10 +83,11 @@ pub fn build(document: Document) -> Graph {
     let Document {
         components,
         relaxed_wildcards,
+        findings,
     } = document;
 
     let mut edges = Vec::new();
-    let mut findings = Vec::new();
+    let mut findings = findings;
 
     // Built once rather than searched for per input. A pipeline of a few
     // hundred components has a few hundred inputs, and a linear scan for each

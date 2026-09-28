@@ -1,0 +1,5 @@
+customConfig:
+  sources:
+    app:
+      type: file
+      include: [/var/log/app/*.log]

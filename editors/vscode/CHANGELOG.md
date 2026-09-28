@@ -4,6 +4,21 @@ Versions before 0.5.0 were never published; they exist as tags and as `.vsix`
 files built locally. They are listed here because the history explains what the
 extension is.
 
+## Unreleased
+
+- **`vrl-tools.vectorConfigDir`, for configs Vector loads with
+  `--config-dir`.** Vector merges the files at the top of a config directory
+  into one, which is what lets a file add a route to a router another file
+  declares; given with `--config`, each file is loaded on its own and such a
+  file fails. The graph now reads each the way Vector would: files named by
+  `vectorConfig` stand alone, files in a `vectorConfigDir` directory merge.
+  Guessed files are read as a directory, as in 0.7.1.
+- **A component without a `type` is reported, and the report says why.**
+  Vector refuses one, and the graph used to draw it as an ordinary box. The
+  finding now tells apart a `type` that is simply missing, a piece whose
+  declaration is in another directory (Vector merges only within one), and a
+  piece in a file given with `--config`.
+
 ## 0.7.1 — 2026-09-28
 
 Four ways the graph misread a real pipeline split across many files — one

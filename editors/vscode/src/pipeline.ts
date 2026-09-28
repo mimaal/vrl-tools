@@ -14,14 +14,29 @@ import { declaresVectorSection, group } from './grouping';
  * another — so reading the file that happens to be open reports every such
  * input as naming nothing.
  *
- * The files are what `vrl-tools.vectorConfig` says, the same patterns Vector
- * is started with. Left empty, they are every YAML or TOML file in the
- * workspace folder that declares a top-level `sources`, `transforms`, `sinks`
- * or `enrichment_tables`: a guess at which files are Vector's, which the
- * setting exists to replace when the guess is wrong. The files' contents are
- * read by the wasm module; this only decides which files to hand it.
+ * The files are what `vrl-tools.vectorConfig` and `vrl-tools.vectorConfigDir`
+ * say, the same arguments Vector is started with: `--config` patterns, whose
+ * files are each loaded on their own, and `--config-dir` directories, whose
+ * top-level files Vector merges into one — so a file there can add a route to
+ * a router another declares. Left empty, they are every YAML or TOML file in
+ * the workspace folder that declares a top-level `sources`, `transforms`,
+ * `sinks` or `enrichment_tables`: a guess at which files are Vector's, which
+ * the settings exist to replace when the guess is wrong. A guessed file is
+ * read as a `--config-dir` one, the only reading in which a file of pieces
+ * works at all. The files' contents are read by the wasm module; this only
+ * decides which files to hand it, and how Vector would load each.
  */
 export const PIPELINE_SETTING = 'vectorConfig';
+
+/** The `--config-dir` directories. See [`PIPELINE_SETTING`]. */
+export const PIPELINE_DIR_SETTING = 'vectorConfigDir';
+
+/** Whether a settings change changes which files are the pipeline. */
+export function affectsPipeline(event: vscode.ConfigurationChangeEvent): boolean {
+  return [PIPELINE_SETTING, PIPELINE_DIR_SETTING].some((setting) =>
+    event.affectsConfiguration(`vrl-tools.${setting}`),
+  );
+}
 
 /**
  * Every file a Vector config can be: the three formats Vector reads, which are
@@ -52,6 +67,11 @@ export interface PipelineFile {
   /** Relative to the workspace folder, with forward slashes. */
   readonly name: string;
   readonly source: string;
+  /**
+   * Given to Vector with `--config`, which loads it on its own: nothing in it
+   * merges with another file. `vector_topology::ConfigFile::standalone`.
+   */
+  readonly standalone: boolean;
 }
 
 export interface Pipeline {
@@ -71,12 +91,49 @@ export interface Pipeline {
  */
 export type ComponentNames = (file: PipelineFile) => readonly string[];
 
-/** The patterns configured for a workspace folder, if any. */
-export function configuredPatterns(folder: vscode.WorkspaceFolder): readonly string[] {
-  return vscode.workspace
-    .getConfiguration('vrl-tools', folder)
-    .get<string[]>(PIPELINE_SETTING, [])
-    .filter((pattern) => pattern.trim() !== '');
+/** What a workspace folder says Vector is started with, if anything. */
+export interface Configured {
+  /** `--config` patterns. */
+  readonly files: readonly string[];
+  /** `--config-dir` directories, which may be patterns too, as in Vector. */
+  readonly dirs: readonly string[];
+}
+
+export function configured(folder: vscode.WorkspaceFolder): Configured | undefined {
+  const settings = vscode.workspace.getConfiguration('vrl-tools', folder);
+  const read = (setting: string) =>
+    settings.get<string[]>(setting, []).filter((pattern) => pattern.trim() !== '');
+  const found = { files: read(PIPELINE_SETTING), dirs: read(PIPELINE_DIR_SETTING) };
+  return found.files.length + found.dirs.length > 0 ? found : undefined;
+}
+
+/**
+ * The files a configured folder names, and whether each is loaded on its own.
+ *
+ * A directory contributes the files directly in it with an extension Vector
+ * reads (`load_dir`, without recursion). The component subfolders a
+ * `--config-dir` may also have — `sources/`, `transforms/`, one component per
+ * file — are not read yet. A file named both ways is read as the directory's.
+ */
+export async function configuredFiles(
+  folder: vscode.WorkspaceFolder,
+  config: Configured,
+): Promise<{ readonly uri: vscode.Uri; readonly standalone: boolean }[]> {
+  const inDirs = await Promise.all(
+    config.dirs.map((dir) => {
+      const base = trimDir(dir);
+      const pattern = base === '' || base === '.' ? '*.{yaml,yml,toml,json}' : `${base}/*.{yaml,yml,toml,json}`;
+      return vscode.workspace.findFiles(new vscode.RelativePattern(folder, pattern), EXCLUDE_GLOB);
+    }),
+  );
+  const merged = unique(inDirs.flat());
+  const alone = (await matching(folder, config.files)).filter(
+    (uri) => !merged.some((other) => sameFile(other, uri)),
+  );
+  return [
+    ...alone.map((uri) => ({ uri, standalone: true })),
+    ...merged.map((uri) => ({ uri, standalone: false })),
+  ].sort((a, b) => a.uri.path.localeCompare(b.uri.path));
 }
 
 /**
@@ -94,7 +151,7 @@ export async function pipelineOf(
   const alone: Pipeline = {
     title: name,
     key: name,
-    files: [{ uri: document.uri, name, source: document.getText() }],
+    files: [{ uri: document.uri, name, source: document.getText(), standalone: false }],
   };
 
   const folder = vscode.workspace.getWorkspaceFolder(document.uri);
@@ -158,15 +215,19 @@ export async function discover(
   folder: vscode.WorkspaceFolder,
   namesOf: ComponentNames,
 ): Promise<Pipeline[]> {
-  // Configured patterns are not a guess: they are the files Vector is started
-  // with, so they are one pipeline whatever the names do.
-  const patterns = configuredPatterns(folder);
-  if (patterns.length > 0) {
-    const files = await read(folder, await matching(folder, patterns));
-    return files.length > 0 ? [{ title: patterns.join(', '), key: patterns.join(','), files }] : [];
+  // Configured files are not a guess: they are what Vector is started with,
+  // so they are one pipeline whatever the names do.
+  const config = configured(folder);
+  if (config) {
+    const files = await read(folder, await configuredFiles(folder, config));
+    const named = [...config.files, ...config.dirs.map((dir) => `${trimDir(dir)}/`)];
+    return files.length > 0 ? [{ title: named.join(', '), key: named.join(','), files }] : [];
   }
 
-  const files = await read(folder, await guessed(folder));
+  const files = await read(
+    folder,
+    (await guessed(folder)).map((uri) => ({ uri, standalone: false })),
+  );
   const names = new Map<string, readonly string[]>();
   const namesCached: ComponentNames = (file) => {
     const known = names.get(file.name);
@@ -247,12 +308,15 @@ export async function guessed(folder: vscode.WorkspaceFolder): Promise<vscode.Ur
   return unique(candidates.filter((_, index) => declaresVectorSection(texts[index] ?? '')));
 }
 
-async function read(folder: vscode.WorkspaceFolder, uris: readonly vscode.Uri[]): Promise<PipelineFile[]> {
+async function read(
+  folder: vscode.WorkspaceFolder,
+  found: readonly { readonly uri: vscode.Uri; readonly standalone: boolean }[],
+): Promise<PipelineFile[]> {
   const files: PipelineFile[] = [];
-  for (const uri of uris) {
+  for (const { uri, standalone } of found) {
     const source = await textOf(uri);
     if (source !== undefined) {
-      files.push({ uri, name: relative(folder, uri), source });
+      files.push({ uri, name: relative(folder, uri), source, standalone });
     }
   }
   return files;
@@ -286,6 +350,11 @@ function unique(uris: readonly vscode.Uri[]): vscode.Uri[] {
  */
 function relative(_folder: vscode.WorkspaceFolder, uri: vscode.Uri): string {
   return vscode.workspace.asRelativePath(uri, false);
+}
+
+/** A directory as written in a setting, without its trailing separators. */
+function trimDir(dir: string): string {
+  return dir.trim().replace(/[\\/]+$/, '');
 }
 
 function nameOf(uri: vscode.Uri): string {
