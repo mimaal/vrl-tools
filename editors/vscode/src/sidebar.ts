@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 
+import { originOf } from './checker';
 import type { Topology, TopologyComponent, TopologyFinding, VrlChecker } from './checker';
+import { mainPipeline } from './grouping';
 import { affectsPipeline, allPipelines, CONFIG_GLOB, sameFile } from './pipeline';
 import type { Pipeline, PipelineChoice } from './pipeline';
 import { componentNames, REVEAL_COMMAND } from './topology';
@@ -44,7 +46,15 @@ type Node =
   | { readonly kind: 'group'; readonly role: (typeof ROLES)[number] }
   | { readonly kind: 'problems' }
   | { readonly kind: 'component'; readonly component: TopologyComponent }
+  | { readonly kind: 'output'; readonly component: TopologyComponent; readonly output: string }
   | { readonly kind: 'finding'; readonly finding: TopologyFinding };
+
+/** How each severity is drawn: the icon and its colour. */
+const SEVERITY = {
+  error: { icon: 'error', colour: 'list.errorForeground' },
+  warning: { icon: 'warning', colour: 'list.warningForeground' },
+  info: { icon: 'info', colour: 'charts.blue' },
+} as const;
 
 /** What one read of the pipeline produced. */
 interface Read {
@@ -216,11 +226,19 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
           .map((component) => ({ kind: 'component', component }));
       case 'problems':
         return analysis.findings.map((finding) => ({ kind: 'finding', finding }));
-      // A component's own problems hang off it, so a row with a badge can be
+      // A router's outputs hang off it, each going to the file that added it
+      // — for a router written across files, not the one that declares it.
+      // Then the component's own problems, so a row with a badge can be
       // opened to see what the badge is about without hunting for it in the
       // list below.
       case 'component':
-        return this.findingsOf(node.component).map((finding) => ({ kind: 'finding', finding }));
+        return [
+          ...node.component.namedOutputs.map(
+            (output): Node => ({ kind: 'output', component: node.component, output }),
+          ),
+          ...this.findingsOf(node.component).map((finding): Node => ({ kind: 'finding', finding })),
+        ];
+      case 'output':
       case 'finding':
         return [];
     }
@@ -236,6 +254,8 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
         return this.problems();
       case 'component':
         return this.component(node.component);
+      case 'output':
+        return this.namedOutput(node.component, node.output);
       case 'finding':
         return this.finding(node.finding);
     }
@@ -283,9 +303,10 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
       const names = componentNames(this.checker);
       const all = await allPipelines(names);
       const chosen = all.findIndex((entry) => entry.key === this.choice.key);
-      // A remembered choice can name a pipeline that has since been renamed or
-      // split differently; falling back to the first keeps the view working.
-      const index = chosen >= 0 ? chosen : 0;
+      // Nothing chosen, or a remembered choice naming a pipeline that has
+      // since been renamed or split differently: the main one, not the first
+      // alphabetically. See `mainPipeline`.
+      const index = chosen >= 0 ? chosen : Math.max(0, mainPipeline(all, names));
       this.at = { index: index + 1, count: all.length };
       const pipeline = all[index];
       if (!pipeline) {
@@ -335,7 +356,9 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
 
   private problems(): vscode.TreeItem {
     const findings = this.read?.analysis.findings ?? [];
-    const errors = findings.filter((finding) => finding.severity === 'error').length;
+    const count = (severity: TopologyFinding['severity']) =>
+      findings.filter((finding) => finding.severity === severity).length;
+    const [errors, warnings, notes] = [count('error'), count('warning'), count('info')];
 
     const item = new vscode.TreeItem(
       'Problems',
@@ -346,15 +369,14 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
     // Both counts, because they mean different things: an error is Vector
     // refusing to start, a warning is Vector running and throwing events
     // away. "2 errors" next to a list of three hides the one you can miss.
-    const warnings = findings.length - errors;
+    // A note is neither: something the editor cannot know.
     item.description = [
       ...(errors > 0 ? [`${errors} error${errors === 1 ? '' : 's'}`] : []),
       ...(warnings > 0 ? [`${warnings} warning${warnings === 1 ? '' : 's'}`] : []),
+      ...(notes > 0 ? [`${notes} note${notes === 1 ? '' : 's'}`] : []),
     ].join(', ');
-    item.iconPath = new vscode.ThemeIcon(
-      errors > 0 ? 'error' : 'warning',
-      new vscode.ThemeColor(errors > 0 ? 'list.errorForeground' : 'list.warningForeground'),
-    );
+    const worst = SEVERITY[errors > 0 ? 'error' : warnings > 0 ? 'warning' : 'info'];
+    item.iconPath = new vscode.ThemeIcon(worst.icon, new vscode.ThemeColor(worst.colour));
     item.contextValue = 'vrl-tools.problems';
     return item;
   }
@@ -366,7 +388,7 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
 
     const item = new vscode.TreeItem(
       component.id,
-      own.length > 0
+      own.length > 0 || component.namedOutputs.length > 0
         ? vscode.TreeItemCollapsibleState.Collapsed
         : vscode.TreeItemCollapsibleState.None,
     );
@@ -384,7 +406,7 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
       new vscode.ThemeColor(
         own.some((finding) => finding.severity === 'error')
           ? 'list.errorForeground'
-          : own.length > 0
+          : own.some((finding) => finding.severity === 'warning')
             ? 'list.warningForeground'
             : (role?.colour ?? 'foreground'),
       ),
@@ -410,6 +432,45 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
     return item;
   }
 
+  /**
+   * One named output, opening the file that added it: `route_by_product` is
+   * declared in `topology.toml`, but its `cloudflare-waf` route is in
+   * `cloudflare_waf.toml`, and that is where somebody clicking the route wants
+   * to be.
+   */
+  private namedOutput(component: TopologyComponent, output: string): vscode.TreeItem {
+    const files = this.read?.analysis.files ?? [];
+    const origin = originOf(component, output);
+    const file = this.read?.pipeline.files[origin.file];
+
+    const item = new vscode.TreeItem(`${component.id}.${output}`);
+    item.description =
+      files.length > 1
+        ? `${(files[origin.file] ?? '').split('/').pop() ?? ''}:${origin.range.start.line + 1}`
+        : `line ${origin.range.start.line + 1}`;
+    item.iconPath = new vscode.ThemeIcon('arrow-right');
+    item.tooltip = `Output \`${output}\` of \`${component.id}\`, added in ${files[origin.file] ?? 'this file'}`;
+    if (file) {
+      item.command = {
+        command: 'vscode.open',
+        title: 'Go to where the output is added',
+        arguments: [
+          file.uri,
+          {
+            selection: new vscode.Range(
+              origin.range.start.line,
+              origin.range.start.character,
+              origin.range.end.line,
+              origin.range.end.character,
+            ),
+          },
+        ],
+      };
+    }
+    item.contextValue = 'vrl-tools.output';
+    return item;
+  }
+
   private finding(finding: TopologyFinding): vscode.TreeItem {
     const files = this.read?.analysis.files ?? [];
     const file = this.read?.pipeline.files[finding.file];
@@ -420,12 +481,8 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
       files.length > 1
         ? `${files[finding.file] ?? ''}:${finding.range.start.line + 1}`
         : `line ${finding.range.start.line + 1}`;
-    item.iconPath = new vscode.ThemeIcon(
-      finding.severity === 'error' ? 'error' : 'warning',
-      new vscode.ThemeColor(
-        finding.severity === 'error' ? 'list.errorForeground' : 'list.warningForeground',
-      ),
-    );
+    const drawn = SEVERITY[finding.severity] ?? SEVERITY.warning;
+    item.iconPath = new vscode.ThemeIcon(drawn.icon, new vscode.ThemeColor(drawn.colour));
     item.tooltip = finding.message.replaceAll('`', '');
 
     if (file) {

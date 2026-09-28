@@ -189,6 +189,18 @@
   }
 
   /** @param {any} range @param {number} file */
+  /**
+   * Where `output` of `component` comes from: the file that added it, or the
+   * component itself when the module does not say (one older than 0.7.2).
+   *
+   * @param {any} component @param {string} output
+   * @returns {{ file: number, range: any }}
+   */
+  function originOf(component, output) {
+    const index = component.namedOutputs.indexOf(output);
+    return component.outputOrigins?.[index] ?? { file: component.file, range: component.range };
+  }
+
   function reveal(range, file) {
     vscode.postMessage({ type: 'reveal', range, file });
   }
@@ -438,6 +450,18 @@
           el('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central' }, label)
         );
         text.textContent = edge.output;
+
+        // The route, not the router: a router written across files is
+        // declared in one and gets each route from another, and clicking
+        // `cloudflare-waf` wants the file that added it.
+        const origin = originOf(from.component, edge.output);
+        const hint = el('title', {}, label);
+        hint.textContent = `${edge.from}.${edge.output} — ${where(origin.file, origin.range)}\nClick to open where this output is added`;
+        label.addEventListener('click', (event) => {
+          event.stopPropagation();
+          reveal(origin.range, origin.file);
+        });
+
         const width = text.getComputedTextLength() + 14;
         rect.setAttribute('width', String(width));
         rect.setAttribute('x', String(point.x - width / 2));
@@ -519,7 +543,7 @@
     for (const [id, { x, y, component }] of at) {
       const own = findingsOf.get(id) ?? [];
       const errors = own.filter((f) => f.severity === 'error').length;
-      const warnings = own.length - errors;
+      const warnings = own.filter((f) => f.severity === 'warning').length;
 
       const classes = ['node', component.role];
       if (errors > 0) classes.push('has-error');
@@ -570,7 +594,8 @@
       fitText(big, id, NODE_W - 32);
 
       if (own.length > 0) {
-        const badge = el('g', { class: `badge ${errors > 0 ? 'error' : 'warning'}` }, group);
+        const worst = errors > 0 ? 'error' : warnings > 0 ? 'warning' : 'info';
+        const badge = el('g', { class: `badge ${worst}` }, group);
         el('circle', { cx: NODE_W - 2, cy: 2, r: 9 }, badge);
         const number = el(
           'text',
@@ -709,7 +734,13 @@
 
     if (own.length > 0) {
       const issues = document.createElement('span');
-      issues.className = `issues ${own.some((f) => f.severity === 'error') ? 'error' : 'warning'}`;
+      issues.className = `issues ${
+        own.some((f) => f.severity === 'error')
+          ? 'error'
+          : own.some((f) => f.severity === 'warning')
+            ? 'warning'
+            : 'info'
+      }`;
       issues.textContent = count(own.length, 'problem', 'problems');
       details.append(issues);
     }
@@ -821,6 +852,10 @@
     }
   }
 
+  /** Errors first, then warnings, then what the editor cannot know. */
+  /** @type {Record<string, number>} */
+  const RANK = { error: 0, warning: 1, info: 2 };
+
   /** @param {any[]} findings */
   function renderProblems(findings) {
     problemList.replaceChildren();
@@ -828,7 +863,7 @@
 
     const sorted = [...findings].sort(
       (a, b) =>
-        (a.severity === 'error' ? 0 : 1) - (b.severity === 'error' ? 0 : 1) ||
+        RANK[a.severity] - RANK[b.severity] ||
         a.range.start.line - b.range.start.line,
     );
     for (const finding of sorted) {

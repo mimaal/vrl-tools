@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 
 import type { Topology, VrlChecker, VrlRange } from './checker';
-import { declaredNames } from './grouping';
+import { EMPTY, shapeOf } from './grouping';
+import type { Shape } from './grouping';
 import { affectsPipeline, anyConfig, CONFIG_GLOB, pipelineOf, sameFile } from './pipeline';
 import type { ComponentNames, PipelineChoice } from './pipeline';
 import type { Pipeline, PipelineFile } from './pipeline';
@@ -166,7 +167,7 @@ function configName(document: vscode.TextDocument): string | undefined {
  * config changes one file's text; the other seventeen answer from here instead
  * of crossing into wasm and parsing again.
  */
-const DECLARED = new Map<string, { source: string; names: readonly string[] }>();
+const DECLARED = new Map<string, { source: string; shape: Shape }>();
 
 /** Enough for any workspace; a cache that grows without end is a leak. */
 const DECLARED_LIMIT = 512;
@@ -175,15 +176,15 @@ export function componentNames(checker: VrlChecker): ComponentNames {
   return (file) => {
     const known = DECLARED.get(file.name);
     if (known && known.source === file.source) {
-      return known.names;
+      return known.shape;
     }
 
-    let names: readonly string[] = [];
+    let shape: Shape = EMPTY;
     try {
       const result = checker.topology(file.source, file.name);
-      names = 'error' in result ? [] : declaredNames(result.components);
+      shape = 'error' in result ? EMPTY : shapeOf(result.components);
     } catch {
-      names = [];
+      shape = EMPTY;
     }
 
     // Emptied rather than evicted one by one: this is a cache in front of a
@@ -192,8 +193,8 @@ export function componentNames(checker: VrlChecker): ComponentNames {
     if (DECLARED.size >= DECLARED_LIMIT) {
       DECLARED.clear();
     }
-    DECLARED.set(file.name, { source: file.source, names });
-    return names;
+    DECLARED.set(file.name, { source: file.source, shape });
+    return shape;
   };
 }
 

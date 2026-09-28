@@ -18,7 +18,15 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 
-import { declaredNames, declaresVectorSection, group } from '../editors/vscode/src/grouping.js';
+import {
+  declaresVectorSection,
+  EMPTY,
+  group,
+  mainPipeline,
+  pipelinesOnly,
+  shapeOf,
+} from '../editors/vscode/src/grouping.js';
+import type { Shape } from '../editors/vscode/src/grouping.js';
 import { errorsIn, topology, topologyFiles } from './checker-harness.js';
 import { ROOT } from './grammar-harness.js';
 
@@ -68,23 +76,30 @@ check(
   [
     'examples/one.yaml',
     'examples/two.yaml',
+    'normalizer/config/00-overlay.toml',
     'normalizer/config/base.toml',
+    'normalizer/config/devices-available/product_a.toml',
+    'normalizer/config/devices-available/product_b.yaml',
     'normalizer/config/monitoring/vector.yaml',
+    'normalizer/config/normalize-router.toml',
     'normalizer/config/product_a.toml',
     'normalizer/config/product_b.yaml',
+    'normalizer/config/topology.toml',
   ],
 );
 
 // --------------------------------------------------------------- the grouping
 
 // `componentNames` in topology.ts: the wasm module's reading of one file.
-const namesOf = (file: File): string[] => {
+const shapeOfFile = (file: File): Shape => {
   const read = topology(file.source, file.name);
-  return 'error' in read ? [] : declaredNames(read.components);
+  return 'error' in read ? EMPTY : shapeOf(read.components);
 };
-const groups = group(guessed, 'pipelines', namesOf);
+const groups = pipelinesOnly(group(guessed, 'pipelines', shapeOfFile), shapeOfFile);
 check(
-  'the pipelines are the ones a person would name',
+  // devices-available/ splits off, because its product files repeat config's,
+  // and is then dropped: it has no sources or sinks of its own.
+  'the pipelines are the ones a person would name, and devices-available is not one',
   groups.map((found) => [found.title, found.files.map((file) => file.name)]),
   [
     ['examples/one.yaml', ['examples/one.yaml']],
@@ -92,18 +107,32 @@ check(
     [
       'normalizer/config',
       [
+        'normalizer/config/00-overlay.toml',
         'normalizer/config/base.toml',
+        'normalizer/config/normalize-router.toml',
         'normalizer/config/product_a.toml',
         'normalizer/config/product_b.yaml',
+        'normalizer/config/topology.toml',
       ],
     ],
     ['normalizer/config/monitoring/vector.yaml', ['normalizer/config/monitoring/vector.yaml']],
   ],
 );
+check(
+  'with nothing chosen, the one shown is the real pipeline, not the first',
+  groups[mainPipeline(groups, shapeOfFile)]?.title,
+  'normalizer/config',
+);
 
 // ---------------------------------------------------------------- the reading
 
-for (const found of groups) {
+const findingsOf = (title: string) => {
+  const found = groups.find((entry) => entry.title === title);
+  const analysis = found ? topologyFiles(found.files, found.title) : undefined;
+  return analysis;
+};
+
+for (const found of groups.filter((entry) => entry.title !== 'normalizer/config')) {
   const analysis = topologyFiles(found.files, found.title);
   check(
     `${found.title}: every file reads, and Vector would start on it`,
@@ -115,37 +144,78 @@ for (const found of groups) {
   );
 }
 
-const normalizer = groups.find((found) => found.title === 'normalizer/config');
-if (normalizer) {
-  const merged = topologyFiles(normalizer.files, normalizer.title);
+const merged = findingsOf('normalizer/config');
+if (merged) {
   check(
-    'the router has the routes of every product, from both formats',
-    merged.components.filter((c) => c.id === 'route_by_product').map((c) => [c.type, c.namedOutputs]),
-    [['exclusive_route', ['product_a', 'product_b', '_unmatched']]],
+    // Nothing is there to read the routers' unmatched events: that is a real
+    // warning, and the only kind this pipeline should get.
+    'normalizer/config: every file reads, and the only findings are the real unread outputs',
+    {
+      unreadable: merged.unreadable,
+      findings: merged.findings.map((finding) => `${finding.severity}: ${finding.message}`),
+    },
+    {
+      unreadable: [],
+      findings: [
+        'warning: nothing reads `route_by_product._unmatched`, so the events it produces go nowhere',
+        'warning: nothing reads `normalize-router._unmatched`, so the events it produces go nowhere',
+      ],
+    },
+  );
+  const routes = (id: string) => merged.components.find((c) => c.id === id)?.namedOutputs;
+  check(
+    'the routes come in file-name order, the overlay first, from both formats',
+    [routes('route_by_product'), routes('normalize-router')],
+    [
+      ['overlay', 'product_a', 'product_b', '_unmatched'],
+      ['product_overlay', 'product_a', 'product_b', '_unmatched'],
+    ],
+  );
+  const router = merged.components.find((c) => c.id === 'route_by_product') as
+    | { file: number; outputOrigins?: { file: number }[] }
+    | undefined;
+  check(
+    'each route goes to the file that added it, the router to the one with its type',
+    router && {
+      router: merged.files[router.file],
+      routes: router.outputOrigins?.map((origin) => merged.files[origin.file]),
+    },
+    {
+      router: 'normalizer/config/topology.toml',
+      routes: [
+        'normalizer/config/00-overlay.toml',
+        'normalizer/config/product_a.toml',
+        'normalizer/config/product_b.yaml',
+        'normalizer/config/topology.toml',
+      ],
+    },
   );
   check(
     'the unquoted variable does not cost base.toml its sources and sinks',
-    merged.components.map((c) => c.id).filter((id) => ['input-http', 'out', 'unrouted'].includes(id)),
-    ['input-http', 'out', 'unrouted'],
+    merged.components.map((c) => c.id).filter((id) => ['input-http', 'out'].includes(id)),
+    ['input-http', 'out'],
   );
 
   // The same files, as Vector reads them when given with `--config`: each on
-  // its own, so the product files are pieces with nowhere to go.
+  // its own, so every file adding a route is a file of pieces with nowhere to go.
+  const found = groups.find((entry) => entry.title === 'normalizer/config');
   const alone = topologyFiles(
-    normalizer.files.map((file) => ({ ...file, standalone: true })),
-    normalizer.title,
+    (found?.files ?? []).map((file) => ({ ...file, standalone: true })),
+    'normalizer/config',
   );
   check(
-    'given with --config, each product file is reported, and says why',
-    alone.findings
-      .filter((finding) => finding.message.includes('has no `type`'))
-      .map((finding) => [
-        alone.files[(finding as { file?: number }).file ?? -1],
-        finding.message.includes('`--config` is loaded on its own'),
-      ]),
+    'given with --config, each file adding a route is reported, and says why',
     [
-      ['normalizer/config/product_a.toml', true],
-      ['normalizer/config/product_b.yaml', true],
+      ...new Set(
+        alone.findings
+          .filter((finding) => finding.message.includes('`--config` is loaded on its own'))
+          .map((finding) => alone.files[(finding as { file?: number }).file ?? -1]),
+      ),
+    ],
+    [
+      'normalizer/config/00-overlay.toml',
+      'normalizer/config/product_a.toml',
+      'normalizer/config/product_b.yaml',
     ],
   );
 } else {
@@ -161,7 +231,7 @@ const programs = guessed.flatMap((file) =>
     ...file.source.matchAll(/^(\s*)source:\s*\|\n((?:\1\s+.*\n?)+)/gm),
   ].map((match) => ({ file: file.name, program: match[match.length - 1] })),
 );
-check('every remap in the corpus is found to compile', programs.length, 3);
+check('every remap in the corpus is found to compile', programs.length, 6);
 for (const { file, program } of programs) {
   check(`${file}: \`${program.trim()}\` compiles`, errorsIn(program).map((e) => e.message), []);
 }

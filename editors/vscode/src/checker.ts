@@ -148,10 +148,33 @@ export interface TopologyComponent {
   readonly range: VrlRange;
   /** The outputs it offers besides its default one: a route's routes, `dropped`, a source's ports. */
   readonly namedOutputs: readonly string[];
+  /**
+   * Where each of `namedOutputs` was added, in the same order: for a router
+   * written across files, the file that added the route. Optional because a
+   * module older than 0.7.2 does not send it; the component's own place is
+   * the fallback.
+   */
+  readonly outputOrigins?: readonly TopologyOrigin[];
   /** Whether an input can name the component itself. `false` for a router. */
   readonly defaultOutput: boolean;
-  /** Which of `Topology.files` declares it. */
+  /** Which of `Topology.files` has its `type`. */
   readonly file: number;
+  /** Every entry it was merged from, in merge order. */
+  readonly pieces?: readonly TopologyOrigin[];
+}
+
+/** A place in one of `Topology.files`. */
+export interface TopologyOrigin {
+  readonly file: number;
+  readonly range: VrlRange;
+}
+
+/** Where `output` of `component` comes from: the file that added it, or the component. */
+export function originOf(component: TopologyComponent, output: string): TopologyOrigin {
+  const index = component.namedOutputs.indexOf(output);
+  return (
+    component.outputOrigins?.[index] ?? { file: component.file, range: component.range }
+  );
 }
 
 export interface TopologyEdge {
@@ -164,7 +187,11 @@ export interface TopologyEdge {
 }
 
 export interface TopologyFinding {
-  readonly severity: 'error' | 'warning';
+  /**
+   * `info` is something the editor cannot know — an input taken from an
+   * environment variable — rather than something wrong.
+   */
+  readonly severity: 'error' | 'warning' | 'info';
   readonly message: string;
   readonly range: VrlRange;
   /** Which of `Topology.files` `range` is in. */

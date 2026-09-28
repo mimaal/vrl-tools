@@ -39,6 +39,10 @@ use crate::config::{Component, Document, Role};
 pub enum Severity {
     Error,
     Warning,
+    /// Something the editor cannot know, said so rather than guessed at: an
+    /// input taken from an environment variable, whose value is on the
+    /// machine Vector runs on.
+    Info,
 }
 
 /// Something wrong with the topology.
@@ -237,6 +241,26 @@ fn resolve(
     edges: &mut Vec<Edge>,
     findings: &mut Vec<Finding>,
 ) {
+    // `inputs = [${X}]`: Vector reads the variable before it parses anything,
+    // and the editor cannot. Reporting that `${X}` names no component would be
+    // an error about text Vector never sees, so it is said for what it is and
+    // no edge is drawn. A name that does match — a component called `${ENV}_app`
+    // declared and read with the same variable — resolves as written, below.
+    if !index.contains_key(input.text.as_str()) {
+        if let Some(variable) = variable_in(&input.text) {
+            findings.push(Finding {
+                severity: Severity::Info,
+                message: format!(
+                    "`{}` comes from the environment variable `{variable}`, whose value is on the                      machine Vector runs on, so the editor cannot tell which component it names",
+                    input.text,
+                ),
+                range: input.range,
+                file: input.file,
+            });
+            return;
+        }
+    }
+
     // A pattern is matched the way Vector's `expand_globs` matches it: against
     // every output of every component, each written as Vector writes an output
     // — `id` for a default output, `id.port` for a named one. So
@@ -396,6 +420,46 @@ fn push_default_edge(
         range: input.range,
         file: input.file,
     });
+}
+
+/// The name of the first environment variable referenced in `text`, in the
+/// forms [`crate::vars`] leaves in place: `$NAME` and `${NAME}` with any
+/// `:-`/`:?` suffix. `$$` is a literal dollar.
+fn variable_in(text: &str) -> Option<&str> {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while let Some(found) = text[index..].find('$') {
+        let start = index + found + 1;
+        match bytes.get(start) {
+            Some(b'$') => index = start + 1,
+            Some(b'{') => {
+                let name = name_at(text, start + 1);
+                if !name.is_empty() {
+                    return Some(name);
+                }
+                index = start;
+            }
+            Some(_) => {
+                let name = name_at(text, start);
+                if !name.is_empty() {
+                    return Some(name);
+                }
+                index = start;
+            }
+            None => return None,
+        }
+    }
+    None
+}
+
+/// The run of `[A-Za-z0-9_.]` at `from`, which is what Vector's interpolation
+/// takes as a variable name.
+fn name_at(text: &str, from: usize) -> &str {
+    let rest = &text[from..];
+    let end = rest
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.'))
+        .unwrap_or(rest.len());
+    &rest[..end]
 }
 
 fn dangling(text: &str, range: Range, file: usize) -> Finding {

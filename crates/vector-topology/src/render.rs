@@ -151,6 +151,7 @@ fn problems(graph: &Graph, files: &[String]) -> String {
         let severity = match finding.severity {
             Severity::Error => "error",
             Severity::Warning => "warning",
+            Severity::Info => "info",
         };
 
         // One-based, because the document is read by a person next to an

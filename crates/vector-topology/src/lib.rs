@@ -206,7 +206,7 @@ pub fn analyse_files_focused(files: &[ConfigFile], title: &str, focus: Option<&s
     }
 
     let names: Vec<String> = files.iter().map(|file| file.name.clone()).collect();
-    let (components, findings) = config::assemble(entries);
+    let (components, findings) = config::assemble(entries, &names);
     let whole = build(Document {
         components,
         relaxed_wildcards,
@@ -301,7 +301,7 @@ fn error_json(message: &str, range: Option<editor_text::Range>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{analyse_files, analyse_json, enrichment_tables, ConfigFile, Format};
+    use super::{analyse_files, analyse_json, enrichment_tables, ConfigFile, Format, Severity};
 
     fn file(name: &str, source: &str) -> ConfigFile {
         ConfigFile {
@@ -481,21 +481,208 @@ sinks:
         assert_eq!(messages, ["`app` has no `type`, and Vector needs one to know what it is"]);
     }
 
-    /// Two files that both say what a component is are two components, even
-    /// in one directory: that is what two unrelated configs side by side look
-    /// like, and what grouping splits a workspace by.
+    /// The base file of the table measured against `vector validate
+    /// --config-dir` 0.55.0: a router with one route, read by a sink that
+    /// takes a second route from the other file.
+    const BASE: &str = "[sources.in]\ntype = \"demo_logs\"\nformat = \"json\"\n\
+        [transforms.r]\ntype = \"exclusive_route\"\ninputs = [\"in\"]\n\
+        [[transforms.r.routes]]\nname = \"one\"\ncondition = '.x == 1'\n\
+        [sinks.out]\ntype = \"blackhole\"\ninputs = [\"r.one\", \"r.two\", \"r._unmatched\"]\n\
+        buffer.max_events = ${N}\n";
+
+    const ROUTE_TWO: &str = "[[transforms.r.routes]]\nname = \"two\"\ncondition = '.x == 2'\n";
+
+    fn messages(analysis: &super::Analysis) -> Vec<&str> {
+        analysis.findings.iter().map(|f| f.message.as_str()).collect()
+    }
+
+    /// Row one: `b.toml` only adds a route. Vector validates it.
     #[test]
-    fn two_declarations_in_one_directory_are_still_a_duplicate() {
+    fn a_file_adding_a_route_validates() {
+        let analysis = analyse_files(
+            &[file("config/a.toml", BASE), file("config/b.toml", ROUTE_TWO)],
+            "config",
+        );
+        assert!(analysis.findings.is_empty(), "{:#?}", analysis.findings);
+    }
+
+    /// Row two: `b.toml` repeats the declaration with the same `type`. Vector
+    /// validates it: the files are one value before they are components, so
+    /// there is no second `r` to be a duplicate of.
+    #[test]
+    fn a_declaration_repeated_with_the_same_type_is_one_component() {
         let analysis = analyse_files(
             &[
-                file("config/a.toml", "[sources.app]\ntype = \"file\"\n"),
-                file("config/b.toml", "[sources.app]\ntype = \"stdin\"\n"),
+                file("config/a.toml", BASE),
+                file(
+                    "config/b.toml",
+                    &format!("[transforms.r]\ntype = \"exclusive_route\"\n{ROUTE_TWO}"),
+                ),
             ],
             "config",
         );
 
-        assert_eq!(analysis.components.len(), 2);
-        assert!(analysis.findings.iter().any(|f| f.message.contains("called `app`")));
+        assert!(analysis.findings.is_empty(), "{:#?}", analysis.findings);
+        let r: Vec<_> = analysis.components.iter().filter(|c| c.id == "r").collect();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].named_outputs, ["one", "two", "_unmatched"]);
+        assert_eq!(analysis.files[r[0].file], "config/a.toml", "placed at the first declaration");
+    }
+
+    /// Row three: `b.toml` says `route`. Vector keeps it and then fails on
+    /// `routes`, which a `route` does not have. Exactly one finding names the
+    /// conflict, at the file that wins it.
+    #[test]
+    fn a_declaration_repeated_with_another_type_names_the_conflict() {
+        let analysis = analyse_files(
+            &[
+                file("config/a.toml", BASE),
+                file("config/b.toml", &format!("[transforms.r]\ntype = \"route\"\n{ROUTE_TWO}")),
+            ],
+            "config",
+        );
+
+        let conflicts: Vec<_> = analysis
+            .findings
+            .iter()
+            .filter(|f| f.message.contains(" in a.toml and "))
+            .collect();
+        assert_eq!(conflicts.len(), 1, "{:#?}", analysis.findings);
+        assert_eq!(
+            conflicts[0].message,
+            "`r` is `exclusive_route` in a.toml and `route` in b.toml; Vector keeps b.toml's",
+        );
+        assert_eq!(conflicts[0].severity, Severity::Error);
+        assert_eq!(analysis.files[conflicts[0].file], "config/b.toml");
+        assert!(!messages(&analysis).iter().any(|m| m.contains("components are called")));
+    }
+
+    /// Any other field set twice: Vector runs, with the later value.
+    #[test]
+    fn a_field_set_differently_in_two_files_is_a_warning_naming_the_winner() {
+        let analysis = analyse_files(
+            &[
+                file(
+                    "config/a.toml",
+                    "[sources.in]\ntype = \"stdin\"\n[sinks.out]\ntype = \"console\"\ninputs = [\"in\"]\nencoding.codec = \"json\"\n",
+                ),
+                file("config/b.toml", "[sinks.out]\ntype = \"console\"\nencoding.codec = \"text\"\n"),
+            ],
+            "config",
+        );
+
+        assert_eq!(
+            messages(&analysis),
+            ["`out` sets `encoding.codec` to `json` in a.toml and to `text` in b.toml; Vector keeps b.toml's"],
+        );
+        assert_eq!(analysis.findings[0].severity, Severity::Warning);
+    }
+
+    /// A string in one file and a table in the other is not a replacement
+    /// but a refusal ("Incompatible types").
+    #[test]
+    fn values_of_different_kinds_are_an_error() {
+        let analysis = analyse_files(
+            &[
+                file(
+                    "config/a.toml",
+                    "[sources.in]\ntype = \"stdin\"\ndecoding = \"json\"\n[sinks.out]\ntype = \"console\"\ninputs = [\"in\"]\n",
+                ),
+                file("config/b.toml", "[sources.in]\ndecoding.codec = \"json\"\n"),
+            ],
+            "config",
+        );
+
+        let found = analysis
+            .findings
+            .iter()
+            .find(|f| f.message.contains("refuses to merge"))
+            .expect("the incompatible values are reported");
+        assert_eq!(found.severity, Severity::Error);
+    }
+
+    /// Across two directories Vector does not merge: two `--config-dir`s are
+    /// appended, and a name they share is "duplicate id". Given with
+    /// `--config`, likewise.
+    #[test]
+    fn declarations_that_vector_does_not_merge_are_still_duplicates() {
+        let app = "[sources.app]\ntype = \"file\"\n";
+        for (a, b) in [
+            (file("prod/a.toml", app), file("staging/a.toml", app)),
+            (alone("config/a.toml", app), alone("config/b.toml", app)),
+        ] {
+            let analysis = analyse_files(&[a, b], "config");
+            assert_eq!(analysis.components.len(), 2);
+            assert!(messages(&analysis).iter().any(|m| m.contains("called `app`")));
+        }
+    }
+
+    /// The order the routes are tried in is the order of the files' names.
+    #[test]
+    fn routes_are_merged_in_file_name_order() {
+        let router = "[sources.in]\ntype = \"stdin\"\n[transforms.r]\ntype = \"exclusive_route\"\ninputs = [\"in\"]\n\
+                      [sinks.out]\ntype = \"console\"\ninputs = [\"r.*\"]\n";
+        // Given out of order on purpose: the merge sorts, the caller need not.
+        let analysis = analyse_files(
+            &[
+                file("config/topology.toml", router),
+                file("config/product.toml", "[[transforms.r.routes]]\nname = \"product\"\ncondition = \"true\"\n"),
+                file("config/00-overlay.toml", "[[transforms.r.routes]]\nname = \"overlay\"\ncondition = \"true\"\n"),
+            ],
+            "config",
+        );
+
+        let r = analysis.components.iter().find(|c| c.id == "r").unwrap();
+        assert_eq!(r.named_outputs, ["overlay", "product", "_unmatched"]);
+    }
+
+    /// Each route remembers the file that added it; the router is still where
+    /// its `type` is.
+    #[test]
+    fn a_route_remembers_the_file_that_added_it() {
+        let analysis = analyse_files(
+            &[file("config/a.toml", BASE), file("config/b.toml", ROUTE_TWO)],
+            "config",
+        );
+
+        let r = analysis.components.iter().find(|c| c.id == "r").unwrap();
+        let from: Vec<&str> = r
+            .output_origins
+            .iter()
+            .map(|origin| analysis.files[origin.file].as_str())
+            .collect();
+        assert_eq!(from, ["config/a.toml", "config/b.toml", "config/a.toml"]);
+        assert_eq!(r.output_origins[1].range.start.line, 0, "at the piece's header");
+        assert_eq!(analysis.files[r.file], "config/a.toml");
+        assert_eq!(r.pieces.len(), 2);
+    }
+
+    /// `inputs = [${X}, "nope"]`: the variable is something the editor cannot
+    /// know, and is said so; `nope` is still an error.
+    #[test]
+    fn an_input_from_a_variable_is_information_not_an_error() {
+        let analysis = analyse_files(
+            &[file(
+                "vector.toml",
+                "[sources.in]\ntype = \"stdin\"\n[sinks.out]\ntype = \"console\"\ninputs = [${X}, \"nope\"]\n",
+            )],
+            "config",
+        );
+
+        let variable = analysis
+            .findings
+            .iter()
+            .find(|f| f.message.contains("environment variable `X`"))
+            .expect("the variable input is reported");
+        assert_eq!(variable.severity, Severity::Info);
+        assert_eq!(
+            (variable.range.start.character, variable.range.end.character),
+            (10, 14)
+        );
+
+        let nope = analysis.findings.iter().find(|f| f.message.contains("`nope`")).unwrap();
+        assert_eq!(nope.severity, Severity::Error);
+        assert!(analysis.edges.iter().all(|e| e.to != "out"), "no edge is drawn");
     }
 
     /// An input a piece adds is underlined in the piece's file, not in the

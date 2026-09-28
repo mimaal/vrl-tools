@@ -12,12 +12,17 @@
  * Run with: npm run test:grouping
  */
 
+import { Exclusions, gitignoreRules, globToRegExp, settingRules } from '../editors/vscode/src/excludes.js';
 import {
   commonDirectory,
   declaredNames,
   declaresVectorSection,
   group,
+  mainPipeline,
+  pipelinesOnly,
+  shapeOf,
 } from '../editors/vscode/src/grouping.js';
+import type { Shape } from '../editors/vscode/src/grouping.js';
 
 let failed = 0;
 
@@ -32,14 +37,41 @@ function check(what: string, actual: unknown, expected: unknown): void {
   failed++;
 }
 
-/** A file, written as `path: componentName componentName ...`. */
-function file(spec: string): { name: string; names: string[] } {
-  const [name, rest] = spec.split(':');
-  return { name: name.trim(), names: (rest ?? '').trim().split(/\s+/).filter(Boolean) };
+interface Spec {
+  readonly name: string;
+  readonly shape: Shape;
 }
 
-function grouped(specs: string[]): { title: string; files: string[] }[] {
-  return group(specs.map(file), 'workspace', (f) => f.names).map((g) => ({
+/**
+ * A file, written as `path: componentName componentName ...` — the names it
+ * declares with a `type`. Unless `rest` says otherwise it is a complete
+ * config, with a source and a sink, which is what every file of the tests
+ * written before shapes existed was.
+ */
+function file(spec: string, rest: Partial<Shape> = {}): Spec {
+  const [name, names] = spec.split(':');
+  return {
+    name: name.trim(),
+    shape: {
+      declared: (names ?? '').trim().split(/\s+/).filter(Boolean),
+      pieces: [],
+      sources: 1,
+      sinks: 1,
+      ...rest,
+    },
+  };
+}
+
+/** A file with neither sources nor sinks: part of a config, not one. */
+const part = (spec: string, rest: Partial<Shape> = {}): Spec =>
+  file(spec, { sources: 0, sinks: 0, ...rest });
+
+function grouped(specs: readonly (string | Spec)[]): { title: string; files: string[] }[] {
+  return group(
+    specs.map((spec) => (typeof spec === 'string' ? file(spec) : spec)),
+    'workspace',
+    (f) => f.shape,
+  ).map((g) => ({
     title: g.title,
     files: g.files.map((f) => f.name),
   }));
@@ -181,16 +213,145 @@ check(
 
 check(
   'pieces added from every file of a directory keep it one pipeline',
-  group(
-    [
-      { name: 'config/base.toml', components: [{ id: 'split', type: 'exclusive_route' }] },
-      { name: 'config/a.toml', components: [{ id: 'split', type: '' }, { id: 'a', type: 'remap' }] },
-      { name: 'config/b.toml', components: [{ id: 'split', type: '' }, { id: 'b', type: 'remap' }] },
-    ],
-    'workspace',
-    (f) => declaredNames(f.components),
-  ).map((g) => g.title),
+  grouped([
+    file('config/base.toml: in split out'),
+    part('config/a.toml: a', { pieces: ['split'] }),
+    part('config/b.toml: b', { pieces: ['split'] }),
+  ]).map((g) => g.title),
   ['config'],
+);
+
+check(
+  'a shape is read from the components: typed names, pieces, sources and sinks',
+  shapeOf([
+    { id: 'in', type: 'stdin', role: 'source' },
+    { id: 'split', type: '', role: 'transform' },
+    { id: 'out', type: 'console', role: 'sink' },
+    { id: 'geo', type: 'file', role: 'table' },
+  ]),
+  { declared: ['in', 'out', 'geo'], pieces: ['split'], sources: 1, sinks: 1 },
+);
+
+// ------------------------------------ a declaration repeated in one directory
+
+check(
+  // The second row of the table measured against `vector validate
+  // --config-dir`: b.toml restates the router it adds a route to. Vector merges
+  // it, so it is not a clash — the wasm module reads the two as one router.
+  'a file restating a declaration of its directory is not a clash',
+  grouped([file('config/a.toml: in r out'), part('config/b.toml: r')]).map((g) => g.title),
+  ['config'],
+);
+
+check(
+  'two complete configs sharing names in one directory are still two',
+  grouped(['examples/a.yaml: app out', 'examples/b.yaml: app out']).map((g) => g.title),
+  ['examples/a.yaml', 'examples/b.yaml'],
+);
+
+check(
+  // Vector merges within one --config-dir only: across directories a shared
+  // name is a duplicate, restated declaration or not.
+  'a declaration restated in another directory is a clash',
+  grouped([file('config/prod/a.toml: in r out'), part('config/staging/b.toml: r')]).map(
+    (g) => g.title,
+  ),
+  ['config/prod/a.toml', 'config/staging/b.toml'],
+);
+
+// ------------------------------------------------- directories that are parts
+
+{
+  // The shape of `normalizer`: config/ is the pipeline, devices-available/
+  // holds the same product files ready to be copied in. Their names clash, so
+  // they split; devices-available has no sources or sinks, and every one of
+  // its names is config's.
+  const files = [
+    file('config/base.toml: input out'),
+    part('config/topology.toml: route_by_product'),
+    part('config/product_a.toml: normalize-a', { pieces: ['route_by_product'] }),
+    part('config/devices-available/product_a.toml: normalize-a', { pieces: ['route_by_product'] }),
+    part('config/devices-available/product_b.toml: normalize-b', { pieces: ['route_by_product'] }),
+    file('config/monitoring/vector.yaml: metrics out'),
+  ];
+  const groups = group(files, 'workspace', (f) => f.shape);
+  check(
+    'a directory of parts splits off from the pipeline it belongs to',
+    groups.map((g) => g.title),
+    ['config', 'config/devices-available', 'config/monitoring/vector.yaml'],
+  );
+  check(
+    'and is not offered as a pipeline',
+    pipelinesOnly(groups, (f: Spec) => f.shape).map((g) => g.title),
+    ['config', 'config/monitoring/vector.yaml'],
+  );
+}
+
+check(
+  'a workspace of nothing but parts keeps them: there is nothing better to show',
+  pipelinesOnly(
+    group([part('transforms/a.toml: a'), part('transforms/b.toml: b')], 'w', (f) => f.shape),
+    (f: Spec) => f.shape,
+  ).map((g) => g.title),
+  ['transforms'],
+);
+
+// ----------------------------------------------------------- the default one
+
+check(
+  // Not the first alphabetically: config-monitoring sorts before config-pipeline.
+  'the default pipeline is the biggest one that can run',
+  (() => {
+    const groups = [
+      { files: [file('config-monitoring/vector.yaml: metrics out')] },
+      { files: [file('config-pipeline/base.toml: in a b c out')] },
+      { files: [part('parts/x.toml: x y z w v u t')] },
+    ];
+    return mainPipeline(groups, (f: Spec) => f.shape);
+  })(),
+  1,
+);
+
+check('no pipelines, no default', mainPipeline([], (f: Spec) => f.shape), -1);
+
+// ---------------------------------------------------- what the guess ignores
+
+{
+  const rules = new Exclusions([
+    ...gitignoreRules('# scratch\ntmp.*\n/build/\n!keep.toml\nlogs/*.yaml\n'),
+    ...settingRules({ '**/.history': true, '**/off': false, '**/when': { when: 'x' } }),
+  ]);
+  for (const [path, expected] of [
+    ['tmp.scratch/vector.toml', true],
+    ['config/tmp.old/vector.toml', true],
+    ['build/vector.toml', true],
+    ['config/build/vector.toml', false],
+    ['logs/a.yaml', true],
+    ['logs/deep/a.yaml', false],
+    ['.history/vector.toml', true],
+    ['off/vector.toml', false],
+    ['when/vector.toml', false],
+    ['config/vector.toml', false],
+  ] as const) {
+    check(`${expected ? 'ignores' : 'keeps'} ${path}`, rules.excludes(path), expected);
+  }
+}
+
+check(
+  'a directory-only pattern does not hide a file of that name',
+  new Exclusions(gitignoreRules('out/\n')).excludes('config/out'),
+  false,
+);
+
+check(
+  'globs: braces, classes and double stars',
+  [
+    globToRegExp('**/{node_modules,.git}/**').test('a/node_modules/x/y.js'),
+    globToRegExp('*.{yaml,yml}').test('a.yml'),
+    globToRegExp('*.{yaml,yml}').test('dir/a.yml'),
+    globToRegExp('file[0-9].toml').test('file7.toml'),
+  ],
+  [true, true, false, true],
 );
 
 // ------------------------------------------------------ which files are Vector's

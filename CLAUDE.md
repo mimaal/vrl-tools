@@ -61,16 +61,33 @@ Free and open source. Full phased plan lives in @docs/PLAN.md.
   machine: a default is used, otherwise the written form is kept (quoted where
   it is a bare TOML value). Spans map back to the file as written.
 
-- A component can be written in pieces across the files of one directory,
-  which `--config-dir` merges with `merge_values` (`load_from_dir`). The graph
-  merges them the same way (`config::assemble`), within a directory only.
-  What is a piece is decided by `type`: two entries that both have one stay
-  two components and a duplicate, and `grouping.ts` counts only typed names
-  (`declaredNames`) for the clash test. A file from `vectorConfig` is
+- A component can be written across the files of one directory, which
+  `--config-dir` reads as **one value before any component is built**
+  (`load_from_dir`, `merge_values`): maps merge, lists concatenate, a scalar
+  set twice is silently the later one's. The graph merges the same way
+  (`config::assemble`), within one directory, and **declarations merge too** —
+  a file restating `type` next to the route it adds is one component, as
+  `vector validate --config-dir` confirmed (0.7.1 kept them apart, and was
+  wrong). A field two files set differently is one finding at the winner:
+  error for `type` and for incompatible kinds, warning otherwise. Files merge
+  in **file-name order**; Vector uses `read_dir` order, which is not sorted —
+  `tests/against_vector.rs` (`the_merge_is_still_vectors`) re-reads that and
+  the rest of the merge from the checkout. A file from `vectorConfig` is
   `standalone` (`--config` loads each file on its own) and merges with
-  nothing; guessed files merge, since that is the only reading in which a file
-  of pieces works at all. Anything left without a `type` is a finding that
-  says which of the three reasons applies (`config::untyped`).
+  nothing; across directories nothing merges. Anything left without a `type`
+  is a finding naming which of three reasons applies (`config::untyped`).
+  Each named output keeps where it was added (`outputOrigins`).
+- Telling **unrelated** configs apart is the grouping's job, never the
+  merge's: by the time the wasm module sees files they are one pipeline.
+  `grouping.ts` decides a clash per pair of files declaring one name — always
+  across directories, and within one directory only between two complete
+  configs (a source and a sink each). A group with neither sources nor sinks
+  whose names belong to a group that has them is a directory of parts
+  (`devices-available/`) and is dropped, not listed (`pipelinesOnly`); the
+  default pipeline is the biggest runnable one (`mainPipeline`). The guess
+  filters `files.exclude`, `search.exclude` and the root `.gitignore`
+  (`excludes.ts`), because `findFiles` with its own exclude applies none of
+  them.
 
 - Which outputs a component has is decided by its `type`, in
   `crates/vector-topology/src/outputs.rs`, and nothing else can decide it: an

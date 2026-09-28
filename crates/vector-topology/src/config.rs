@@ -102,6 +102,12 @@ pub struct Component {
     /// The outputs this component offers besides its default one. See
     /// [`crate::outputs`].
     pub named_outputs: Vec<String>,
+    /// Where each of [`Self::named_outputs`] comes from, in the same order: the
+    /// file that added the route, which for a router written across files is
+    /// not the file that declares it. A list beside the names rather than a
+    /// list of pairs, so a reader of the JSON that knows only the names keeps
+    /// working.
+    pub output_origins: Vec<Origin>,
     /// Whether an input can name the component itself. `false` for a router,
     /// for an `opentelemetry` source, and for anything events only end at.
     /// See [`crate::outputs`].
@@ -110,6 +116,24 @@ pub struct Component {
     /// the caller gave. `range` is in that file.
     /// Always 0 when a single file is read.
     pub file: usize,
+    /// Every entry the component was merged from, in merge order: just the
+    /// declaration, unless files of a `--config-dir` add to it.
+    pub pieces: Vec<Origin>,
+}
+
+/// A place in one of the files being read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Origin {
+    pub file: usize,
+    pub range: Range,
+}
+
+/// One entry of a merged component, with the body it wrote.
+#[derive(Debug, Clone)]
+struct Part {
+    origin: Origin,
+    body: Value,
 }
 
 impl Component {
@@ -179,6 +203,8 @@ pub(crate) struct Entry {
     /// Whether the file was given to Vector with `--config`, which loads each
     /// file on its own and merges nothing. See [`crate::ConfigFile`].
     standalone: bool,
+    /// What it was merged from, once it has been. See [`merge`].
+    parts: Vec<Part>,
 }
 
 impl Entry {
@@ -214,7 +240,7 @@ pub(crate) struct Entries {
 
 impl Entries {
     fn into_document(self) -> Document {
-        let (components, findings) = assemble(self.entries);
+        let (components, findings) = assemble(self.entries, &[]);
         Document {
             components,
             relaxed_wildcards: self.relaxed_wildcards,
@@ -236,7 +262,11 @@ pub(crate) enum Value {
     List(Vec<Value>),
     /// In the order the keys are written.
     Map(Vec<(String, Value)>),
-    /// A number, a date, a null: nothing the graph reads.
+    Integer(i64),
+    Float(f64),
+    Null,
+    /// A date: nothing the graph reads, and nothing two files set differently
+    /// that this could tell apart.
     Other,
 }
 
@@ -248,30 +278,34 @@ impl Value {
         }
     }
 
-    /// Vector's `merge_values` (`src/config/loading/representation.rs`):
-    /// mappings merge key by key, lists are concatenated, and anything else is
-    /// replaced by the later value. Vector refuses two values of different
-    /// kinds at one key; here the later one wins, since the graph reads so
-    /// little of a component that the conflict is rarely in anything it shows.
-    fn merge(self, other: Self) -> Self {
-        match (self, other) {
-            (Self::Map(mut entries), Self::Map(other)) => {
-                for (key, value) in other {
-                    match entries.iter_mut().find(|(name, _)| *name == key) {
-                        Some(slot) => {
-                            let existing = std::mem::replace(&mut slot.1, Self::Other);
-                            slot.1 = existing.merge(value);
-                        }
-                        None => entries.push((key, value)),
-                    }
-                }
-                Self::Map(entries)
-            }
-            (Self::List(mut items), Self::List(other)) => {
-                items.extend(other);
-                Self::List(items)
-            }
-            (_, other) => other,
+    /// Whether Vector's `merge_values` would replace one with the other rather
+    /// than refuse: the same kind, and for a number the same kind of number.
+    fn same_kind(&self, other: &Self) -> bool {
+        std::mem::discriminant(self) == std::mem::discriminant(other)
+    }
+
+    /// The kind, for saying two do not merge.
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Bool(_) => "a boolean",
+            Self::Text(_) => "a string",
+            Self::List(_) => "a list",
+            Self::Map(_) => "a table",
+            Self::Integer(_) => "an integer",
+            Self::Float(_) => "a float",
+            Self::Null => "null",
+            Self::Other => "a date",
+        }
+    }
+
+    /// A scalar as it would be written, for saying which one Vector keeps.
+    fn shown(&self) -> String {
+        match self {
+            Self::Bool(flag) => format!("`{flag}`"),
+            Self::Text(text) => format!("`{text}`"),
+            Self::Integer(number) => format!("`{number}`"),
+            Self::Float(number) => format!("`{number}`"),
+            _ => self.kind().to_owned(),
         }
     }
 }
@@ -352,6 +386,7 @@ pub(crate) fn yaml_entries(source: &str) -> Result<Entries, ConfigError> {
                 file: 0,
                 directory: String::new(),
                 standalone: false,
+                parts: Vec::new(),
             });
         }
     }
@@ -371,6 +406,12 @@ fn yaml_value(node: &MarkedYaml<'_>) -> Value {
         Value::Bool(flag)
     } else if let Some(text) = node.data.as_str() {
         Value::Text(text.to_owned())
+    } else if let Some(number) = node.data.as_integer() {
+        Value::Integer(number)
+    } else if let Some(number) = node.data.as_floating_point() {
+        Value::Float(number)
+    } else if node.data.is_null() {
+        Value::Null
     } else if let Some(items) = node.data.as_sequence() {
         Value::List(items.iter().map(yaml_value).collect())
     } else if let Some(entries) = node.data.as_mapping() {
@@ -460,6 +501,7 @@ pub(crate) fn toml_entries(source: &str) -> Result<Entries, ConfigError> {
                 file: 0,
                 directory: String::new(),
                 standalone: false,
+                parts: Vec::new(),
             });
         }
     }
@@ -505,6 +547,8 @@ fn toml_inline(value: &toml_edit::Value) -> Value {
     match value {
         toml_edit::Value::String(text) => Value::Text(text.value().clone()),
         toml_edit::Value::Boolean(flag) => Value::Bool(*flag.value()),
+        toml_edit::Value::Integer(number) => Value::Integer(*number.value()),
+        toml_edit::Value::Float(number) => Value::Float(*number.value()),
         toml_edit::Value::Array(items) => Value::List(items.iter().map(toml_inline).collect()),
         toml_edit::Value::InlineTable(table) => Value::Map(
             table
@@ -549,30 +593,26 @@ fn toml_inputs(table: &dyn toml_edit::TableLike, positions: &Positions<'_>) -> V
 /// Puts the entries of every file together into components.
 ///
 /// Entries of one role and one name, in files of one directory, are one
-/// component written in pieces — the case Vector's `--config-dir` exists for,
-/// and the only one in which it accepts a piece that is not a whole component:
-/// given with `--config`, every file must stand alone, and a piece without a
-/// `type` fails to load. Beyond a directory nothing is merged, as in Vector,
-/// which `append`s each `--config-dir` to the others and refuses a name they
-/// share.
+/// component — the case Vector's `--config-dir` exists for. Vector reads the
+/// top-level files of the directory as one value before it builds a single
+/// component (`load_from_dir`, `merge_into_map`), so a file adding
+/// `[[transforms.split.routes]]` to a router another declares, and a file
+/// repeating the whole declaration, both come out as one router. Beyond a
+/// directory nothing is merged, as in Vector, which `append`s each
+/// `--config-dir` to the others and refuses a name they share ("duplicate
+/// transform id"); and a file given with `--config` merges with nothing.
 ///
-/// What is a piece is decided by `type`. One file declares the component and
-/// says what it is; the others only add to it. Two that both say what it is
-/// are two components with one name — which is what files from two unrelated
-/// pipelines look like, and what [`crate::graph`] reports. Vector itself,
-/// given them in one `--config-dir`, would quietly let the later one win; no
-/// one writes a config meaning that, and drawing it as one component would
-/// hide a mistake.
+/// Telling unrelated configs apart is not this function's job: two
+/// `vector.yaml` examples side by side are split into separate pipelines by
+/// `editors/vscode/src/grouping.ts` before they get here. What arrives is one
+/// pipeline, and within one pipeline Vector merges.
 ///
-/// Pieces merge in the order the files were given, with Vector's
-/// [`Value::merge`], and the component is placed where its declaration is.
-/// A file given with `--config` merges with nothing.
-///
-/// Whatever is left without a `type` once that is done is a finding, and the
-/// finding says why, because "has no type" alone is baffling about a file
-/// that was only ever meant to add a route: see [`untyped`].
+/// The files merge in name order ([`merge`]), and where two of them set one
+/// field to different values the later one wins silently, as in Vector — which
+/// is exactly why it is worth a finding ([`clash`]). Whatever is left without
+/// a `type` is a finding too, saying why ([`untyped`]).
 #[must_use]
-pub(crate) fn assemble(entries: Vec<Entry>) -> (Vec<Component>, Vec<Finding>) {
+pub(crate) fn assemble(entries: Vec<Entry>, names: &[String]) -> (Vec<Component>, Vec<Finding>) {
     let declared: HashSet<(Role, String)> = entries
         .iter()
         .filter(|entry| entry.declares())
@@ -600,13 +640,12 @@ pub(crate) fn assemble(entries: Vec<Entry>) -> (Vec<Component>, Vec<Finding>) {
     let mut components = Vec::new();
     let mut findings = Vec::new();
     for group in groups {
-        for entry in merge(group) {
-            if !entry.declares() {
-                let elsewhere = declared.contains(&(entry.role, entry.id.clone()));
-                findings.push(untyped(&entry, elsewhere));
-            }
-            push(&mut components, entry);
+        let entry = merge(group, names, &mut findings);
+        if !entry.declares() {
+            let elsewhere = declared.contains(&(entry.role, entry.id.clone()));
+            findings.push(untyped(&entry, elsewhere));
         }
+        push(&mut components, entry);
     }
     (components, findings)
 }
@@ -623,11 +662,14 @@ fn untyped(entry: &Entry, declared_elsewhere: bool) -> Finding {
         format!("`{id}` has no `type`, and Vector needs one to know what it is")
     } else if entry.standalone {
         format!(
-            "`{id}` has no `type`: this adds to a `{id}` declared in another file, but a file given              with `--config` is loaded on its own. Only the files of one `--config-dir` are merged",
+            "`{id}` has no `type`: this adds to a `{id}` declared in another file, but a file \
+             given with `--config` is loaded on its own. Only the files of one `--config-dir` \
+             are merged",
         )
     } else {
         format!(
-            "`{id}` has no `type`: this adds to a `{id}` declared in another directory, and Vector              merges the pieces of a component only within one `--config-dir`",
+            "`{id}` has no `type`: this adds to a `{id}` declared in another directory, and \
+             Vector merges the pieces of a component only within one `--config-dir`",
         )
     };
     Finding {
@@ -638,48 +680,206 @@ fn untyped(entry: &Entry, declared_elsewhere: bool) -> Finding {
     }
 }
 
-/// One group of [`assemble`]: every declaration stays itself, and the pieces
-/// join the first of them.
-fn merge(group: Vec<Entry>) -> Vec<Entry> {
-    if group.len() == 1 {
-        return group;
-    }
+/// One group of [`assemble`], merged into one entry.
+///
+/// **Order.** By file name, which is the order the fixture this was measured
+/// against gives and the only one that can be reproduced. Vector itself does
+/// not sort: it merges in the order `read_dir` lists the directory (its
+/// `serde_json` keeps insertion order, `preserve_order`), which is
+/// alphabetical on some filesystems and hash order on ext4. Lists are
+/// concatenated, so the order is the order of a router's routes — which for
+/// an `exclusive_route` is the order they are tried in. A config that depends
+/// on it depends on the filesystem; `tests/against_vector.rs` re-reads that
+/// Vector still does not sort.
+///
+/// **Where it is.** The component is placed at the first entry whose `type`
+/// is the one that won — the declaration, not a file adding a route — so
+/// clicking it goes where it is said what it is. Every entry is kept as a
+/// [`Part`], for placing each named output at the file that added it.
+fn merge(mut group: Vec<Entry>, names: &[String], findings: &mut Vec<Finding>) -> Entry {
+    let name = |file: usize| names.get(file).map_or("", String::as_str);
+    // Stable, so the entries of one file keep their order.
+    group.sort_by(|a, b| name(a.file).cmp(name(b.file)));
 
-    let (mut declared, pieces): (Vec<Entry>, Vec<Entry>) =
-        group.into_iter().partition(Entry::declares);
-    if pieces.is_empty() {
-        return declared;
-    }
+    let parts: Vec<Part> = group
+        .iter()
+        .map(|entry| Part {
+            origin: Origin {
+                file: entry.file,
+                range: entry.range,
+            },
+            body: entry.body.clone(),
+        })
+        .collect();
 
-    // Nothing says what it is: the pieces are still one component, without a
-    // type, which is the finding to show rather than one per piece.
-    let anchor = if declared.is_empty() {
-        None
-    } else {
-        Some(declared.remove(0))
+    let mut entries = group.into_iter();
+    let Some(mut whole) = entries.next() else {
+        unreachable!("a group has at least the entry that started it");
     };
-    let (range, file) = anchor
-        .as_ref()
-        .or(pieces.first())
-        .map(|entry| (entry.range, entry.file))
-        .unwrap_or_default();
-
-    let mut all: Vec<Entry> = anchor.into_iter().chain(pieces).collect();
-    all.sort_by_key(|entry| entry.file);
-    let mut all = all.into_iter();
-    let Some(mut whole) = all.next() else {
-        return declared;
-    };
-    for piece in all {
-        whole.body = whole.body.merge(piece.body);
+    let mut setters = HashMap::new();
+    record(&whole.body, whole.file, "", &mut setters);
+    for piece in entries {
+        let mut clashes = Vec::new();
+        let at = Origin {
+            file: piece.file,
+            range: piece.range,
+        };
+        let body = std::mem::replace(&mut whole.body, Value::Null);
+        whole.body = merge_values(body, piece.body, piece.file, "", &mut setters, &mut clashes);
+        findings.extend(
+            clashes
+                .into_iter()
+                .map(|found| clash(&whole.id, &found, at, names)),
+        );
         whole.inputs.extend(piece.inputs);
     }
-    whole.range = range;
-    whole.file = file;
 
-    let mut merged = vec![whole];
-    merged.extend(declared);
-    merged
+    let winner = whole.body.get("type");
+    if let Some(anchor) = parts
+        .iter()
+        .find(|part| winner.is_some() && part.body.get("type") == winner)
+    {
+        whole.file = anchor.origin.file;
+        whole.range = anchor.origin.range;
+    }
+    whole.parts = parts;
+    whole
+}
+
+/// Where each field of a merged body was last set, by path, so a clash can
+/// name the file that loses it.
+fn record(value: &Value, file: usize, path: &str, setters: &mut HashMap<String, usize>) {
+    setters.insert(path.to_owned(), file);
+    if let Value::Map(entries) = value {
+        for (key, value) in entries {
+            record(value, file, &join(path, key), setters);
+        }
+    }
+}
+
+fn join(path: &str, key: &str) -> String {
+    if path.is_empty() {
+        key.to_owned()
+    } else {
+        format!("{path}.{key}")
+    }
+}
+
+/// Two files setting one field differently.
+struct Clash {
+    path: String,
+    before: Value,
+    before_file: usize,
+    after: Value,
+}
+
+/// Vector's `merge_values` (`src/config/loading/representation.rs`), noting
+/// every field it overwrites with a different value.
+///
+/// Mappings merge key by key, lists are concatenated, and any other value is
+/// replaced by the later one — silently when both are the same kind, with
+/// "Incompatible types" when they are not (a string and a table, an integer
+/// and a float). The replacement is kept here in both cases, because the graph
+/// still has to be drawn; [`clash`] says which it was.
+fn merge_values(
+    value: Value,
+    other: Value,
+    file: usize,
+    path: &str,
+    setters: &mut HashMap<String, usize>,
+    clashes: &mut Vec<Clash>,
+) -> Value {
+    match (value, other) {
+        (Value::Map(mut entries), Value::Map(other)) => {
+            setters.insert(path.to_owned(), file);
+            for (key, value) in other {
+                let inner = join(path, &key);
+                match entries.iter_mut().find(|(name, _)| *name == key) {
+                    Some(slot) => {
+                        let existing = std::mem::replace(&mut slot.1, Value::Null);
+                        slot.1 = merge_values(existing, value, file, &inner, setters, clashes);
+                    }
+                    None => {
+                        record(&value, file, &inner, setters);
+                        entries.push((key, value));
+                    }
+                }
+            }
+            Value::Map(entries)
+        }
+        (Value::List(mut items), Value::List(other)) => {
+            setters.insert(path.to_owned(), file);
+            items.extend(other);
+            Value::List(items)
+        }
+        (before, after) => {
+            if before != after {
+                clashes.push(Clash {
+                    path: path.to_owned(),
+                    before_file: setters.get(path).copied().unwrap_or(file),
+                    before,
+                    after: after.clone(),
+                });
+            }
+            record(&after, file, path, setters);
+            after
+        }
+    }
+}
+
+/// The finding for a [`Clash`], at the entry that wins it.
+///
+/// A warning, because Vector starts: the later file's value is simply the one
+/// it uses, and the earlier file is misleading whoever reads it. An error when
+/// the two are different kinds, which Vector refuses to merge, and when the
+/// field is `type` — the component is then something the rest of its fields
+/// were not written for, and fails validation on the first that does not fit.
+fn clash(id: &str, found: &Clash, winner: Origin, names: &[String]) -> Finding {
+    let short = |file: usize| {
+        names
+            .get(file)
+            .map_or("another file", |name| name.rsplit(['/', '\\']).next().unwrap_or(name))
+            .to_owned()
+    };
+    let (earlier, later) = (short(found.before_file), short(winner.file));
+    let key = &found.path;
+
+    let (severity, message) = if !found.before.same_kind(&found.after) {
+        (
+            Severity::Error,
+            format!(
+                "`{id}` sets `{key}` to {} in {earlier} and to {} in {later}, which Vector refuses \
+                 to merge",
+                found.before.kind(),
+                found.after.kind(),
+            ),
+        )
+    } else if key == "type" {
+        (
+            Severity::Error,
+            format!(
+                "`{id}` is {} in {earlier} and {} in {later}; Vector keeps {later}'s",
+                found.before.shown(),
+                found.after.shown(),
+            ),
+        )
+    } else {
+        (
+            Severity::Warning,
+            format!(
+                "`{id}` sets `{key}` to {} in {earlier} and to {} in {later}; Vector keeps \
+                 {later}'s",
+                found.before.shown(),
+                found.after.shown(),
+            ),
+        )
+    };
+    Finding {
+        severity,
+        message,
+        range: winner.range,
+        file: winner.file,
+    }
 }
 
 /// Adds a component and, when it has one, the source half of an enrichment
@@ -692,6 +892,18 @@ fn push(components: &mut Vec<Component>, entry: Entry) {
     let fields = Body(&entry.body);
     let component_type = fields.text("type").unwrap_or_default();
     let outputs = outputs::declared(entry.role, &component_type, &fields);
+    let anchor = Origin {
+        file: entry.file,
+        range: entry.range,
+    };
+    let parts = if entry.parts.is_empty() {
+        vec![Part {
+            origin: anchor,
+            body: entry.body.clone(),
+        }]
+    } else {
+        entry.parts
+    };
 
     if entry.role == Role::Table {
         if let Some((source_key, source)) = outputs::table_source(&component_type, &fields) {
@@ -701,13 +913,16 @@ fn push(components: &mut Vec<Component>, entry: Entry) {
                 component_type: component_type.clone(),
                 inputs: Vec::new(),
                 range: entry.range,
+                output_origins: vec![anchor; source.named.len()],
                 named_outputs: source.named,
                 default_output: source.default,
                 file: entry.file,
+                pieces: vec![anchor],
             });
         }
     }
 
+    let output_origins = origins(entry.role, &component_type, &outputs.named, anchor, &parts);
     components.push(Component {
         id: entry.id,
         role: entry.role,
@@ -715,9 +930,45 @@ fn push(components: &mut Vec<Component>, entry: Entry) {
         inputs: entry.inputs,
         range: entry.range,
         named_outputs: outputs.named,
+        output_origins,
         default_output: outputs.default,
         file: entry.file,
+        pieces: parts.iter().map(|part| part.origin).collect(),
     });
+}
+
+/// Which part added each named output.
+///
+/// Asked of the rules in [`crate::outputs`] rather than worked out from the
+/// field names: each part is read on its own, with the merged `type`, and the
+/// first to offer an output added it. The declaration is asked first, so an
+/// output every part would offer — `_unmatched` — belongs to it.
+fn origins(
+    role: Role,
+    component_type: &str,
+    named: &[String],
+    anchor: Origin,
+    parts: &[Part],
+) -> Vec<Origin> {
+    let offered: Vec<(Origin, Vec<String>)> = parts
+        .iter()
+        .filter(|part| part.origin == anchor)
+        .chain(parts.iter().filter(|part| part.origin != anchor))
+        .map(|part| {
+            let fields = Body(&part.body);
+            (part.origin, outputs::declared(role, component_type, &fields).named)
+        })
+        .collect();
+
+    named
+        .iter()
+        .map(|output| {
+            offered
+                .iter()
+                .find(|(_, names)| names.contains(output))
+                .map_or(anchor, |(origin, _)| *origin)
+        })
+        .collect()
 }
 
 /// One component's fields, for [`crate::outputs`].

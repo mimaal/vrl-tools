@@ -224,3 +224,60 @@ fn reroute_dropped_is_still_only_remaps() {
         );
     }
 }
+
+/// The merge `config::assemble` reproduces: the top-level files of a
+/// `--config-dir` read as one value before any component is built, with
+/// `merge_values`' rules — lists concatenated, a scalar replaced by the later
+/// one of its kind, two kinds refused.
+///
+/// And the one place the crate knowingly differs: it merges in file-name
+/// order, where Vector merges in the order `read_dir` lists the directory —
+/// its `serde_json` keeps insertion order, and nothing sorts. If Vector starts
+/// sorting, the difference is gone and the doc on `config::merge` is wrong.
+#[test]
+fn the_merge_is_still_vectors() {
+    let Some(root) = vector_source() else {
+        return;
+    };
+    let read = |file: &str| {
+        std::fs::read_to_string(root.join(file)).unwrap_or_else(|error| panic!("{file}: {error}"))
+    };
+
+    let representation = read("src/config/loading/representation.rs");
+    for rule in [
+        "(Value::String(_), Value::String(other)) => Ok(Value::String(other))",
+        "(Value::Bool(_), Value::Bool(other)) => Ok(Value::Bool(other))",
+        "if number_type(&value) == number_type(&other)",
+        "value.extend(other);",
+        "Incompatible types at path",
+    ] {
+        assert!(
+            representation.contains(rule),
+            "merge_values no longer has `{rule}`; re-read it and update Value's merge in \
+             crates/vector-topology/src/config.rs",
+        );
+    }
+
+    let loader = read("src/config/loading/loader.rs");
+    assert!(
+        loader.contains("merge_into_map(&mut root, map)?"),
+        "load_from_dir no longer merges the top-level files into one value",
+    );
+    let load_dir_into = loader
+        .split("fn load_dir_into")
+        .nth(1)
+        .and_then(|rest| rest.split("fn load_file").next())
+        .expect("load_dir_into is still there");
+    assert!(
+        !load_dir_into.contains("sort"),
+        "Vector now sorts a config directory; config::merge's doc says it does not",
+    );
+
+    let manifest = read("Cargo.toml");
+    assert!(
+        manifest
+            .lines()
+            .any(|line| line.starts_with("serde_json") && line.contains("preserve_order")),
+        "Vector's serde_json no longer keeps insertion order",
+    );
+}

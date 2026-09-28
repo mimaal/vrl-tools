@@ -4,8 +4,59 @@ Versions before 0.5.0 were never published; they exist as tags and as `.vsix`
 files built locally. They are listed here because the history explains what the
 extension is.
 
-## Unreleased
+## 0.7.2 — Unreleased
 
+After 0.7.1 the pipeline that exposed it drew right: 16 files, 26 components,
+54 edges, three findings, all three real. What was left were the things around
+it — a directory that restates a declaration, an input Vector reads from the
+environment, a route that could not say where it came from, a directory of
+spare parts offered as a pipeline, and a scratch directory git ignores. Each
+was checked against `vector validate --config-dir` 0.55.0 and against Vector's
+source at the pin.
+
+- **A component declared in two files of one directory is one component.**
+  Vector reads the files of a `--config-dir` as one value before it builds a
+  single component, so a product's file that restates
+  `[transforms.r] type = "exclusive_route"` next to the route it adds is not a
+  second `r`: it validates, and the graph said "2 components are called `r`",
+  "`r` has no inputs" and "`r` has no output `two`". Declarations now merge
+  like any other piece. Where two files set one field to different values,
+  Vector keeps the later one silently, and the graph says so, once, at the
+  file that wins: "`r` is `exclusive_route` in a.toml and `route` in b.toml;
+  Vector keeps b.toml's" — an error for `type`, which fails validation on the
+  first field that does not fit, and for two kinds of value Vector refuses to
+  merge; a warning for anything else. Across two directories, or between
+  files given with `--config`, Vector does not merge, and a shared name is
+  still a duplicate. Telling unrelated configs apart stays where it was, in
+  the grouping: two complete configs that share names in one directory are
+  still two.
+- **Routes merge in file-name order**, so `00-overlay.toml`'s route is tried
+  first. Vector itself merges in the order the directory lists its files,
+  which is not alphabetical on every filesystem; a config whose routes depend
+  on it depends on the disk it is on.
+- **An input read from an environment variable is a note, not an error.**
+  `inputs = [${X}]` said "no component is called `${X}`", about text Vector
+  never sees. It is now an `info` finding saying the value is on the machine
+  Vector runs on, with no edge drawn, and still underlines `${X}` where it is
+  written.
+- **A route goes to the file that added it.** Every named output now carries
+  where it comes from, so clicking `route_by_product.cloudflare-waf` — on the
+  graph's arrow label, or under the router in the sidebar, which now lists its
+  outputs — opens `cloudflare_waf.toml`, not the file that declares the
+  router. Clicking the router still opens the file with its `type`.
+- **A directory of parts is not offered as a pipeline.** `devices-available/`,
+  the product files kept ready to be copied into `config/`, split off from the
+  pipeline because its names clash with it, and was listed with 258 files and
+  777 findings. A group with no sources and no sinks whose names belong to a
+  pipeline that has them is now left out; its files still graph on their own
+  when opened.
+- **With nothing chosen, the pipeline shown is the main one**: the biggest
+  that has both sources and sinks, not the first alphabetically, which was as
+  likely to be `config-monitoring`.
+- **The guess honours `files.exclude`, `search.exclude` and `.gitignore`.**
+  `findFiles` with an exclude of its own applies none of them, so a
+  `tmp.*` scratch directory ignored by git came up as a pipeline. Files named
+  by `vrl-tools.vectorConfig` or `vectorConfigDir` are never filtered.
 - **`vrl-tools.vectorConfigDir`, for configs Vector loads with
   `--config-dir`.** Vector merges the files at the top of a config directory
   into one, which is what lets a file add a route to a router another file

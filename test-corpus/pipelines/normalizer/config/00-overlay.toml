@@ -1,0 +1,16 @@
+# Named to sort first: its route is tried before every product's.
+
+[[transforms.route_by_product.routes]]
+name = "overlay"
+condition = '.overlay == true'
+
+[[transforms.normalize-router.routes]]
+name = "product_overlay"
+condition = '.source == "overlay"'
+
+[transforms.product-overlay]
+type = "remap"
+inputs = ["route_by_product.overlay"]
+source = '''
+.source = "overlay"
+'''

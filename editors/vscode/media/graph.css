@@ -12,6 +12,7 @@
   --table: var(--vscode-charts-orange, #e2a03f);
   --error: var(--vscode-errorForeground, #f14c4c);
   --warning: var(--vscode-editorWarning-foreground, #cca700);
+  --info: var(--vscode-editorInfo-foreground, #3794ff);
   --muted: var(--vscode-descriptionForeground, #8b949e);
   --surface: var(--vscode-editorWidget-background, #252526);
   --border: var(--vscode-widget-border, rgba(128, 128, 128, 0.35));
@@ -234,6 +235,7 @@ svg#canvas.panning {
 
 .badge.error circle { fill: var(--error); }
 .badge.warning circle { fill: var(--warning); }
+.badge.info circle { fill: var(--info); }
 
 .badge text {
   fill: var(--vscode-editor-background);
@@ -255,10 +257,13 @@ svg#canvas.panning {
   stroke-dasharray: 5 4;
 }
 
+/* A route's label opens the file that added the route. */
+.edge-label { cursor: pointer; }
 .edge-label rect {
   fill: var(--vscode-editor-background);
   stroke: var(--border);
 }
+.edge-label:hover rect { stroke: var(--vscode-focusBorder, #007fd4); }
 
 .edge-label text {
   fill: var(--muted);
@@ -336,6 +341,7 @@ svg.tracing .edge.on-path path {
 
 #problems .severity.error { color: var(--error); }
 #problems .severity.warning { color: var(--warning); }
+#problems .severity.info { color: var(--info); }
 
 #problems .line {
   color: var(--muted);
@@ -498,6 +504,7 @@ svg.tracing .edge.on-path path {
 .issues { font-weight: 600; }
 .issues.error { color: var(--error); }
 .issues.warning { color: var(--warning); }
+.issues.info { color: var(--info); }
 
 .node.selected .card {
   stroke: var(--edge-active);

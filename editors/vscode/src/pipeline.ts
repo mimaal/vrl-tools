@@ -2,7 +2,9 @@ import { promises as fs } from 'node:fs';
 
 import * as vscode from 'vscode';
 
-import { declaresVectorSection, group } from './grouping';
+import { Exclusions, gitignoreRules, settingRules } from './excludes';
+import { declaresVectorSection, group, mainPipeline, pipelinesOnly } from './grouping';
+import type { Shape } from './grouping';
 
 /**
  * Which files make up a Vector pipeline.
@@ -83,13 +85,13 @@ export interface Pipeline {
 }
 
 /**
- * The component names one file declares, which is how the files found in a
- * workspace are told apart into pipelines.
+ * What one file declares, which is how the files found in a workspace are told
+ * apart into pipelines. See `Shape` in `./grouping.ts`.
  *
  * Passed in rather than read here, so this file still knows nothing about the
  * wasm module — it decides which files to hand over, and nothing else.
  */
-export type ComponentNames = (file: PipelineFile) => readonly string[];
+export type ComponentNames = (file: PipelineFile) => Shape;
 
 /** What a workspace folder says Vector is started with, if anything. */
 export interface Configured {
@@ -188,7 +190,7 @@ export async function anyPipeline(
   preferred?: string,
 ): Promise<Pipeline | undefined> {
   const all = await allPipelines(namesOf);
-  return all.find((pipeline) => pipeline.key === preferred) ?? all[0];
+  return all.find((pipeline) => pipeline.key === preferred) ?? all[mainPipeline(all, namesOf)];
 }
 
 /** One file of [`anyPipeline`], for a caller that needs a document to open. */
@@ -228,7 +230,7 @@ export async function discover(
     folder,
     (await guessed(folder)).map((uri) => ({ uri, standalone: false })),
   );
-  const names = new Map<string, readonly string[]>();
+  const names = new Map<string, Shape>();
   const namesCached: ComponentNames = (file) => {
     const known = names.get(file.name);
     if (known) {
@@ -239,7 +241,7 @@ export async function discover(
     return read;
   };
 
-  return group(files, folder.name, namesCached).map((found) => ({
+  return pipelinesOnly(group(files, folder.name, namesCached), namesCached).map((found) => ({
     title: found.title,
     key: found.key,
     files: found.files,
@@ -297,15 +299,43 @@ export async function matching(
   return unique(found.flat());
 }
 
-/** Every YAML or TOML file in the folder that declares a Vector section. */
+/**
+ * Every YAML or TOML file in the folder that declares a Vector section, and
+ * that the workspace does not exclude. See `./excludes.ts`.
+ */
 export async function guessed(folder: vscode.WorkspaceFolder): Promise<vscode.Uri[]> {
-  const candidates = await vscode.workspace.findFiles(
-    new vscode.RelativePattern(folder, GUESS_GLOB),
-    EXCLUDE_GLOB,
-    MAX_CANDIDATES,
-  );
+  const excluded = await exclusions(folder);
+  const candidates = (
+    await vscode.workspace.findFiles(
+      new vscode.RelativePattern(folder, GUESS_GLOB),
+      EXCLUDE_GLOB,
+      MAX_CANDIDATES,
+    )
+  ).filter((uri) => !excluded.excludes(relative(folder, uri)));
   const texts = await Promise.all(candidates.map((uri) => textOf(uri)));
   return unique(candidates.filter((_, index) => declaresVectorSection(texts[index] ?? '')));
+}
+
+/**
+ * What the guess leaves out: `files.exclude`, `search.exclude` and the
+ * folder's own `.gitignore`. Only the one at the folder's root — a nested
+ * `.gitignore` is rarer, and reading every one means walking the tree the
+ * search was meant to spare.
+ */
+async function exclusions(folder: vscode.WorkspaceFolder): Promise<Exclusions> {
+  const setting = (section: string) =>
+    settingRules(vscode.workspace.getConfiguration(section, folder).get('exclude'));
+  let ignored: string | undefined;
+  try {
+    ignored = await fs.readFile(vscode.Uri.joinPath(folder.uri, '.gitignore').fsPath, 'utf8');
+  } catch {
+    ignored = undefined;
+  }
+  return new Exclusions([
+    ...setting('files'),
+    ...setting('search'),
+    ...(ignored ? gitignoreRules(ignored) : []),
+  ]);
 }
 
 async function read(
