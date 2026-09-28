@@ -13,10 +13,12 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
-    # Here rather than on the step: `secrets` cannot be read in a step's `if`,
-    # and a workflow that tries is rejected before any job starts.
+    # Whether the token is set, not the token: `secrets` cannot be read in a
+    # step's `if`, and a workflow that tries is rejected before any job starts.
+    # The token itself stays on the one step that uses it, out of reach of the
+    # build, which runs every npm and cargo build script in the graph.
     env:
-      OVSX_PAT: ${{ secrets.OVSX_PAT }}
+      HAS_OVSX_PAT: ${{ secrets.OVSX_PAT != '' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -48,19 +50,6 @@ jobs:
           name: vrl-tools-${{ steps.vsix.outputs.version }}.vsix
           path: ${{ steps.vsix.outputs.path }}
 
-      # Open VSX: the registry the forks read - VSCodium, Cursor, Windsurf,
-      # Gitpod, Theia. Unlike the Microsoft Marketplace below, this one is
-      # automated, because it can be: `ovsx` takes an ordinary access token,
-      # not an Azure DevOps global PAT with a retirement date on it.
-      #
-      # The namespace is created once, by hand, with
-      # `npx ovsx create-namespace miguel-martinez`; it has to match the
-      # manifest's `publisher`. This step only publishes, and skips itself
-      # where the secret is not set, so a fork's tag does not fail the release.
-      - name: Open VSX
-        if: startsWith(github.ref, 'refs/tags/') && env.OVSX_PAT != ''
-        run: npx ovsx publish "${{ steps.vsix.outputs.path }}" -p "$OVSX_PAT"
-
       # Publishing to the Microsoft Marketplace
       #
       # This workflow deliberately stops at the GitHub release. The last step
@@ -89,3 +78,22 @@ jobs:
             "${{ steps.vsix.outputs.path }}" \
             --title "${GITHUB_REF#refs/tags/}" \
             --notes "Install from the Marketplace, or with \`code --install-extension vrl-tools-${{ steps.vsix.outputs.version }}.vsix\` using the file below. See CHANGELOG.md for what changed."
+
+      # Open VSX: the registry the forks read - VSCodium, Cursor, Windsurf,
+      # Gitpod, Theia. Unlike the Microsoft Marketplace above, this one is
+      # automated, because it can be: `ovsx` takes an ordinary access token,
+      # not an Azure DevOps global PAT with a retirement date on it.
+      #
+      # The namespace is created once, by hand, with
+      # `npx ovsx create-namespace miguel-martinez`; it has to match the
+      # manifest's `publisher`. This step only publishes, and skips itself
+      # where the secret is not set, so a fork's tag does not fail the release.
+      #
+      # After the GitHub release, not before: a registry refusing the token
+      # once left a tag with no release and no .vsix anywhere. The release is
+      # what the Marketplace upload is done from, so it goes out first.
+      - name: Open VSX
+        if: startsWith(github.ref, 'refs/tags/') && env.HAS_OVSX_PAT == 'true'
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: npx ovsx publish "${{ steps.vsix.outputs.path }}" -p "$OVSX_PAT"
