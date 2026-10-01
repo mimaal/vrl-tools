@@ -291,7 +291,8 @@
 
     const drawn = drawEdges([...edges, ...lookups], at, lanes);
     const read = new Set(edges.map((edge) => written(edge.from, edge.output)));
-    const groups = drawNodes(at, findingsOf, read);
+    const terminal = new Set(/** @type {string[]} */ (analysis.terminal ?? []));
+    const groups = drawNodes(at, findingsOf, read, terminal);
 
     // The same edges as text. The drawing is one image to a screen reader,
     // and "errors" on an arrow says nothing without the box it leaves.
@@ -677,9 +678,10 @@
    * @param {Map<string, Placed>} at
    * @param {Map<string, any[]>} findingsOf
    * @param {Set<string>} read the outputs something reads, as written
+   * @param {Set<string>} terminal the outputs marked as ending on purpose, as written
    * @returns {Map<string, SVGGElement>}
    */
-  function drawNodes(at, findingsOf, read) {
+  function drawNodes(at, findingsOf, read, terminal) {
     /** @type {Map<string, SVGGElement>} */
     const groups = new Map();
 
@@ -738,8 +740,28 @@
 
       // `dropped` with nobody reading it is a fact about this box, so it is
       // written on the box. Read, it is an arrow like any other output.
-      if (component.namedOutputs.includes('dropped') && !read.has(written(id, 'dropped'))) {
-        portBadge(group, 'dropped', `${written(id, 'dropped')} — nothing reads it`);
+      /** @type {{text: string, hint: string, kind: 'unread' | 'terminal'}[]} */
+      const ports = [];
+      for (const output of component.namedOutputs) {
+        const name = written(id, output);
+        if (read.has(name)) {
+          continue;
+        }
+        // An output that ends here on purpose is not a problem, and is not
+        // drawn as one.
+        if (terminal.has(name)) {
+          ports.push({
+            text: `${output} ⊣`,
+            hint: `${name} — nothing reads it, and it is marked as terminal`,
+            kind: 'terminal',
+          });
+        } else if (output === 'dropped') {
+          ports.push({ text: output, hint: `${name} — nothing reads it`, kind: 'unread' });
+        }
+      }
+      portBadges(group, ports);
+      if (component.defaultOutput && !read.has(id) && terminal.has(id)) {
+        endMarker(group, id);
       }
 
       if (own.length > 0) {
@@ -778,25 +800,61 @@
   }
 
   /**
-   * A small label on the bottom edge of a box, for an output that leaves it
-   * and goes nowhere.
+   * The small labels along the bottom edge of a box, right to left: outputs
+   * that leave it and go nowhere. An unread `dropped` in the warning's
+   * colour; an output that ends on purpose in an arrow's, with ⊣ after its
+   * name. They sit on the box because an arrow needs somewhere to go, and
+   * out of the way of the arrows that do.
    *
-   * @param {SVGGElement} group @param {string} text @param {string} hint
+   * What does not fit on the edge is counted in the last one, and named in
+   * its tooltip.
+   *
+   * @param {SVGGElement} group
+   * @param {{text: string, hint: string, kind: 'unread' | 'terminal'}[]} items
    */
-  function portBadge(group, text, hint) {
-    const badge = el('g', { class: 'port-badge' }, group);
-    el('title', {}, badge).textContent = hint;
-    const rect = el('rect', { height: 14, rx: 7, ry: 7, y: NODE_H - 7 }, badge);
-    const label = /** @type {SVGTextElement} */ (
-      el('text', { y: NODE_H, 'text-anchor': 'middle', 'dominant-baseline': 'central' }, badge)
-    );
-    label.textContent = text;
-    const width = label.getComputedTextLength() + 12;
-    rect.setAttribute('width', String(width));
-    rect.setAttribute('x', String(NODE_W - 12 - width));
-    label.setAttribute('x', String(NODE_W - 12 - width / 2));
+  function portBadges(group, items) {
+    let right = NODE_W - 12;
+    items.forEach((item, index) => {
+      const rest = items.slice(index);
+      const badge = el('g', { class: `port-badge ${item.kind}` }, group);
+      const rect = el('rect', { height: 14, rx: 7, ry: 7, y: NODE_H - 7 }, badge);
+      const label = /** @type {SVGTextElement} */ (
+        el('text', { y: NODE_H, 'text-anchor': 'middle', 'dominant-baseline': 'central' }, badge)
+      );
+      label.textContent = item.text;
+      let width = label.getComputedTextLength() + 12;
+      let hint = item.hint;
+      // No room for this one and the ones after it: say how many, once.
+      const crowded = right - width < 14 && index > 0;
+      if (crowded) {
+        label.textContent = `+${rest.length}`;
+        width = label.getComputedTextLength() + 12;
+        hint = rest.map((other) => other.hint).join('\n');
+      }
+      el('title', {}, badge).textContent = hint;
+      rect.setAttribute('width', String(width));
+      rect.setAttribute('x', String(right - width));
+      label.setAttribute('x', String(right - width / 2));
+      right -= width + 4;
+      if (crowded) {
+        items.length = index + 1;
+      }
+    });
   }
 
+  /**
+   * The end of the line for a component's default output: a short line out
+   * of the box, stopped by a bar. ⊣, drawn.
+   *
+   * @param {SVGGElement} group @param {string} id
+   */
+  function endMarker(group, id) {
+    const marker = el('g', { class: 'terminal', role: 'img', 'aria-label': `${id} ends here on purpose` }, group);
+    el('title', {}, marker).textContent = `${id} — nothing reads it, and it is marked as terminal`;
+    el('path', { d: `M ${NODE_W} ${NODE_H / 2} h 18 m 0 -6 v 12` }, marker);
+  }
+
+  // ------------------------------------------------------ paths and selection
   // ------------------------------------------------------ paths and selection
 
   /**

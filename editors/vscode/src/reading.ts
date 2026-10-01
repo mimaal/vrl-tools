@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import * as vscode from 'vscode';
 
 import type { PipelineOptions, Topology, TopologyTable, VrlChecker } from './checker';
-import { sameFile } from './pipeline';
+import { sameFile, TERMINAL_SETTING } from './pipeline';
 import type { Pipeline } from './pipeline';
 import { candidates, countRows } from './tablefiles';
 
@@ -35,10 +35,14 @@ export async function readPipeline(
     source: file.source,
     standalone: file.standalone,
   }));
+  // The folder's settings, since they say things about this pipeline: which
+  // of its outputs end on purpose.
+  const settings = vscode.workspace.getConfiguration('vrl-tools', pipeline.files[0]?.uri);
   const read = async (wanted: readonly { path: string; file: number }[]) =>
     checker.pipeline(files, pipeline.title, {
       ...options,
       programs: await programs(pipeline, wanted),
+      terminalOutputs: settings.get<string[]>(TERMINAL_SETTING, []),
     });
 
   let analysis = await read(WANTED.get(pipeline.key) ?? []);

@@ -49,6 +49,12 @@ export interface Topology {
     readonly read: boolean;
   }[];
   readonly opaqueLookups: readonly string[];
+  readonly terminal: readonly string[];
+  readonly unread: readonly {
+    readonly output: string;
+    readonly finding: number;
+    readonly mark: { readonly file: number; readonly line: number; readonly name: string | null };
+  }[];
   readonly edges: readonly {
     readonly from: string;
     readonly output: string | null;

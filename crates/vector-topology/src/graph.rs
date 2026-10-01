@@ -19,7 +19,9 @@
 //!   `sources` or `sinks` — `validation::check_shape`;
 //! - a loop — `Graph::check_for_cycles`;
 //! - an output nobody reads — `validation::warnings`, which is the only one of
-//!   the lot Vector treats as a warning rather than a refusal to start.
+//!   the lot Vector treats as a warning rather than a refusal to start. It is
+//!   also the only one that can be answered with "yes, on purpose": see
+//!   [`crate::terminal`].
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
@@ -27,6 +29,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 use editor_text::Range;
 
 use crate::config::{Component, Document, Role};
+use crate::terminal;
 
 /// How much a finding matters.
 ///
@@ -80,6 +83,35 @@ pub struct Graph {
     pub components: Vec<Component>,
     pub edges: Vec<Edge>,
     pub findings: Vec<Finding>,
+    /// The outputs nothing reads that are marked as ending on purpose, as an
+    /// input would name them. Not findings: ends. See [`crate::terminal`].
+    pub terminal: Vec<String>,
+    /// The outputs nothing reads that are *not* marked, each with its finding
+    /// and with where a mark for it would go.
+    pub unread: Vec<Unread>,
+}
+
+/// An output nothing reads, and how to say that is intended.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Unread {
+    /// As an input would name it.
+    pub output: String,
+    /// Index into [`Graph::findings`]: the warning about it.
+    pub finding: usize,
+    pub mark: Mark,
+}
+
+/// Where a `# vrl-tools: terminal` comment goes to mark one output.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Mark {
+    pub file: usize,
+    /// Zero-based. The comment goes at the end of this line.
+    pub line: u32,
+    /// The name to write after the marker, when the line alone does not say
+    /// which output is meant.
+    pub name: Option<String>,
 }
 
 /// Resolves a config into a graph.
@@ -89,6 +121,7 @@ pub fn build(document: Document) -> Graph {
         components,
         relaxed_wildcards,
         findings,
+        terminal: terminal_patterns,
     } = document;
 
     let mut edges = Vec::new();
@@ -163,7 +196,7 @@ pub fn build(document: Document) -> Graph {
     inputs(&components, &mut findings);
     shape(&components, &mut findings);
     cycles(&components, &edges, &index, &mut findings);
-    unconsumed(&components, &edges, &mut findings);
+    let (terminal, unread) = unconsumed(&components, &edges, &terminal_patterns, &mut findings);
 
     let order = flow_order(&components, &edges, &index);
     drop(written);
@@ -174,6 +207,8 @@ pub fn build(document: Document) -> Graph {
         components,
         edges,
         findings,
+        terminal,
+        unread,
     }
 }
 
@@ -320,6 +355,8 @@ pub fn focus(graph: &Graph, id: &str) -> Option<Graph> {
             .cloned()
             .collect(),
         findings: graph.findings.clone(),
+        terminal: graph.terminal.clone(),
+        unread: graph.unread.clone(),
     })
 }
 
@@ -678,7 +715,19 @@ fn shape(components: &[Component], findings: &mut Vec<Finding>) {
 /// finished and quietly throws two thirds of its events away. A component
 /// events only end at — a sink, an enrichment table — has no outputs, so it is
 /// never reported.
-fn unconsumed(components: &[Component], edges: &[Edge], findings: &mut Vec<Finding>) {
+///
+/// An output marked as ending on purpose is not reported either; it is
+/// returned, first, to be drawn as an end. The second list is the ones that
+/// are reported, each with where the mark that would accept it goes.
+fn unconsumed(
+    components: &[Component],
+    edges: &[Edge],
+    patterns: &[String],
+    findings: &mut Vec<Finding>,
+) -> (Vec<String>, Vec<Unread>) {
+    let mut ends = Vec::new();
+    let mut unread = Vec::new();
+
     // The outputs something reads, written the way an input names them, so
     // this is one pass over the edges rather than one pass per output.
     let mut read: HashSet<String> = HashSet::with_capacity(edges.len());
@@ -690,11 +739,20 @@ fn unconsumed(components: &[Component], edges: &[Edge], findings: &mut Vec<Findi
     }
 
     for component in components {
-        for (_, written) in component.outputs() {
+        for (port, written) in component.outputs() {
             if read.contains(&written) {
                 continue;
             }
+            if terminal::accepts(component, &written, patterns) {
+                ends.push(written);
+                continue;
+            }
 
+            unread.push(Unread {
+                output: written.clone(),
+                finding: findings.len(),
+                mark: mark_for(component, port),
+            });
             findings.push(Finding {
                 severity: Severity::Warning,
                 message: format!("nothing reads `{written}`, so the events it produces go nowhere"),
@@ -702,6 +760,46 @@ fn unconsumed(components: &[Component], edges: &[Edge], findings: &mut Vec<Findi
                 file: component.file,
             });
         }
+    }
+    (ends, unread)
+}
+
+/// Where the comment that marks one output of `component` goes.
+///
+/// On the route's own line when it has one that a comment can safely follow:
+/// the `name` of an `exclusive_route`'s route, which is one short string. A
+/// key under `route` has a line too, but its value is a condition that may
+/// run over several, and a comment appended there would land inside it. Those,
+/// and the outputs nobody writes down (`_unmatched`, `dropped`, a default
+/// output), go on the line that declares the component, named.
+fn mark_for(component: &Component, port: Option<&String>) -> Mark {
+    if let Some(port) = port {
+        let origin = component
+            .named_outputs
+            .iter()
+            .position(|name| name == port)
+            .and_then(|position| component.output_origins.get(position));
+        if let Some(origin) = origin {
+            if component.component_type == "exclusive_route" && !component.pieces.contains(origin) {
+                return Mark {
+                    file: origin.file,
+                    line: origin.range.start.line,
+                    name: None,
+                };
+            }
+        }
+    }
+
+    Mark {
+        file: component.file,
+        line: component.range.start.line,
+        name: match port {
+            Some(port) => Some(port.clone()),
+            // Bare, the marker means the whole component. That is this one
+            // output when it has no other.
+            None if component.named_outputs.is_empty() => None,
+            None => Some(component.id.clone()),
+        },
     }
 }
 
@@ -840,7 +938,7 @@ fn is_glob(input: &str) -> bool {
 /// `[!abc]` a class. A `[` with no closing `]` is taken literally, where the
 /// glob crate would reject the pattern and Vector would fall back to the
 /// literal string.
-fn matches_glob(pattern: &str, text: &str) -> bool {
+pub(crate) fn matches_glob(pattern: &str, text: &str) -> bool {
     let pattern: Vec<char> = pattern.chars().collect();
     let text: Vec<char> = text.chars().collect();
     glob_from(&pattern, &text)

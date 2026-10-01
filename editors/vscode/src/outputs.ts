@@ -49,7 +49,13 @@ export function consumers(edges: readonly Flows[]): Map<string, string[]> {
   return found;
 }
 
-/** Where an output goes, in a few words: `→ time-diff` or `(unread)`. */
-export function destination(readers: readonly string[] | undefined): string {
-  return readers && readers.length > 0 ? `→ ${readers.join(', ')}` : '(unread)';
+/**
+ * Where an output goes, in a few words: `→ time-diff`, `(unread)`, or
+ * `⊣ terminal` for one nothing reads that is marked as ending on purpose.
+ */
+export function destination(readers: readonly string[] | undefined, terminal = false): string {
+  if (readers && readers.length > 0) {
+    return `→ ${readers.join(', ')}`;
+  }
+  return terminal ? '⊣ terminal' : '(unread)';
 }

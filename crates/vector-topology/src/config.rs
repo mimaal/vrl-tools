@@ -27,6 +27,7 @@ use saphyr::{LoadableYamlNode, MarkedYaml};
 use crate::graph::{Finding, Severity};
 use crate::lookups::{self, Found};
 use crate::outputs::{self, Fields};
+use crate::terminal::{self, Marker};
 use crate::vars::{self, Interpolated, Syntax};
 
 /// Which of the four maps a component came from.
@@ -134,6 +135,9 @@ pub struct Component {
     /// For an enrichment table read from a file, the path of its data: a
     /// `file` table's `file.path`, a `geoip` or `mmdb` table's `path`.
     pub path: Option<String>,
+    /// The outputs a comment in the config marks as ending on purpose, as an
+    /// input would name them. See [`crate::terminal`].
+    pub terminal: Vec<String>,
     /// Whether the first line of a `file` table's CSV is its header rather
     /// than a row: `file.encoding.include_headers`, which defaults to `true`.
     /// Needed by whoever counts the rows; `true` for everything else.
@@ -153,6 +157,23 @@ pub struct Origin {
 struct Part {
     origin: Origin,
     body: Value,
+    /// Where each route it writes is written. See [`Entry::spots`].
+    spots: Vec<(String, Range)>,
+}
+
+impl Part {
+    /// Where this part writes the output `name`: the route's own line when it
+    /// has one, the part's header otherwise.
+    fn spot(&self, name: &str) -> Origin {
+        Origin {
+            file: self.origin.file,
+            range: self
+                .spots
+                .iter()
+                .find(|(route, _)| route == name)
+                .map_or(self.origin.range, |(_, range)| *range),
+        }
+    }
 }
 
 impl Component {
@@ -192,6 +213,9 @@ pub struct Document {
     /// What is wrong with a component that only shows once the files are put
     /// together — a piece with no declaration to join. See [`assemble`].
     pub findings: Vec<Finding>,
+    /// Patterns naming outputs that end on purpose, from outside the config.
+    /// See [`crate::terminal`].
+    pub terminal: Vec<String>,
 }
 
 /// Why a config could not be read at all.
@@ -232,6 +256,12 @@ pub(crate) struct Entry {
     standalone: bool,
     /// What it was merged from, once it has been. See [`merge`].
     parts: Vec<Part>,
+    /// Where each route is written, by name: a key of `route`, the `name` of
+    /// an entry of `routes`. A route written with a header of its own
+    /// (`[[transforms.x.routes]]`) is here twice, the name first, so a comment
+    /// on either line finds it. Positions only: what the routes *are* is
+    /// [`crate::outputs`]'s, read from the body.
+    spots: Vec<(String, Range)>,
 }
 
 impl Entry {
@@ -263,15 +293,18 @@ impl Entry {
 pub(crate) struct Entries {
     pub(crate) entries: Vec<Entry>,
     pub(crate) relaxed_wildcards: bool,
+    /// The `# vrl-tools: terminal` comments of the file.
+    pub(crate) markers: Vec<Marker>,
 }
 
 impl Entries {
     fn into_document(self) -> Document {
-        let (components, findings) = assemble(self.entries, &[]);
+        let (components, findings) = assemble(self.entries, &[], &self.markers);
         Document {
             components,
             relaxed_wildcards: self.relaxed_wildcards,
             findings,
+            terminal: Vec::new(),
         }
     }
 }
@@ -414,6 +447,7 @@ pub(crate) fn yaml_entries(source: &str) -> Result<Entries, ConfigError> {
                 directory: String::new(),
                 standalone: false,
                 parts: Vec::new(),
+                spots: yaml_spots(body, &positions),
             });
         }
     }
@@ -425,7 +459,28 @@ pub(crate) fn yaml_entries(source: &str) -> Result<Entries, ConfigError> {
             .as_mapping_get(WILDCARD_MATCHING)
             .and_then(|node| node.data.as_str())
             == Some(RELAXED),
+        markers: terminal::markers(source),
     })
+}
+
+fn yaml_spots(body: &MarkedYaml<'_>, positions: &Positions<'_>) -> Vec<(String, Range)> {
+    let mut spots = Vec::new();
+    if let Some(routes) = body.data.as_mapping_get("route").and_then(|node| node.data.as_mapping()) {
+        for (key, _) in routes {
+            if let Some(name) = key.data.as_str() {
+                spots.push((name.to_owned(), yaml_range(key, positions)));
+            }
+        }
+    }
+    if let Some(routes) = body.data.as_mapping_get("routes").and_then(|node| node.data.as_sequence()) {
+        for route in routes {
+            let Some(name) = route.data.as_mapping_get("name") else { continue };
+            if let Some(text) = name.data.as_str() {
+                spots.push((text.to_owned(), yaml_range(name, positions)));
+            }
+        }
+    }
+    spots
 }
 
 fn yaml_value(node: &MarkedYaml<'_>) -> Value {
@@ -529,6 +584,7 @@ pub(crate) fn toml_entries(source: &str) -> Result<Entries, ConfigError> {
                 directory: String::new(),
                 standalone: false,
                 parts: Vec::new(),
+                spots: toml_spots(table, &positions),
             });
         }
     }
@@ -539,7 +595,47 @@ pub(crate) fn toml_entries(source: &str) -> Result<Entries, ConfigError> {
             .get(WILDCARD_MATCHING)
             .and_then(toml_edit::Item::as_str)
             == Some(RELAXED),
+        markers: terminal::markers(source),
     })
+}
+
+fn toml_spots(table: &dyn toml_edit::TableLike, positions: &Positions<'_>) -> Vec<(String, Range)> {
+    let mut spots = Vec::new();
+    let mut push = |name: &str, span: Option<std::ops::Range<usize>>| {
+        if let Some(span) = span {
+            spots.push((name.to_owned(), positions.range(span)));
+        }
+    };
+
+    if let Some(routes) = table.get("route").and_then(toml_edit::Item::as_table_like) {
+        for (name, _) in routes.iter() {
+            push(name, routes.get_key_value(name).and_then(|(key, _)| key.span()));
+        }
+    }
+    match table.get("routes") {
+        // `[[transforms.x.routes]]`: the name, then the header above it.
+        Some(toml_edit::Item::ArrayOfTables(routes)) => {
+            for route in routes.iter() {
+                let Some(name) = route.get("name") else { continue };
+                if let Some(text) = name.as_str() {
+                    push(text, name.span());
+                    push(text, route.span());
+                }
+            }
+        }
+        Some(toml_edit::Item::Value(toml_edit::Value::Array(routes))) => {
+            for route in routes.iter() {
+                let Some(name) = route.as_inline_table().and_then(|route| route.get("name")) else {
+                    continue;
+                };
+                if let Some(text) = name.as_str() {
+                    push(text, name.span());
+                }
+            }
+        }
+        _ => {}
+    }
+    spots
 }
 
 /// `[[transforms.x.routes]]` tables and an inline array of
@@ -639,7 +735,11 @@ fn toml_inputs(table: &dyn toml_edit::TableLike, positions: &Positions<'_>) -> V
 /// is exactly why it is worth a finding ([`clash`]). Whatever is left without
 /// a `type` is a finding too, saying why ([`untyped`]).
 #[must_use]
-pub(crate) fn assemble(entries: Vec<Entry>, names: &[String]) -> (Vec<Component>, Vec<Finding>) {
+pub(crate) fn assemble(
+    entries: Vec<Entry>,
+    names: &[String],
+    markers: &[Marker],
+) -> (Vec<Component>, Vec<Finding>) {
     let declared: HashSet<(Role, String)> = entries
         .iter()
         .filter(|entry| entry.declares())
@@ -666,14 +766,16 @@ pub(crate) fn assemble(entries: Vec<Entry>, names: &[String]) -> (Vec<Component>
 
     let mut components = Vec::new();
     let mut findings = Vec::new();
+    let mut used = vec![false; markers.len()];
     for group in groups {
         let entry = merge(group, names, &mut findings);
         if !entry.declares() {
             let elsewhere = declared.contains(&(entry.role, entry.id.clone()));
             findings.push(untyped(&entry, elsewhere));
         }
-        push(&mut components, entry);
+        push(&mut components, entry, markers, &mut used, &mut findings);
     }
+    findings.extend(terminal::stray(markers, &used));
     (components, findings)
 }
 
@@ -736,6 +838,7 @@ fn merge(mut group: Vec<Entry>, names: &[String], findings: &mut Vec<Finding>) -
                 range: entry.range,
             },
             body: entry.body.clone(),
+            spots: entry.spots.clone(),
         })
         .collect();
 
@@ -915,7 +1018,13 @@ fn clash(id: &str, found: &Clash, winner: Origin, names: &[String]) -> Finding {
 ///
 /// Its range is the table's, because that is where the name is written and so
 /// where clicking the node should land.
-fn push(components: &mut Vec<Component>, entry: Entry) {
+fn push(
+    components: &mut Vec<Component>,
+    entry: Entry,
+    markers: &[Marker],
+    used: &mut [bool],
+    findings: &mut Vec<Finding>,
+) {
     let fields = Body(&entry.body);
     let component_type = fields.text("type").unwrap_or_default();
     let outputs = outputs::declared(entry.role, &component_type, &fields);
@@ -927,6 +1036,7 @@ fn push(components: &mut Vec<Component>, entry: Entry) {
         vec![Part {
             origin: anchor,
             body: entry.body.clone(),
+            spots: entry.spots.clone(),
         }]
     } else {
         entry.parts
@@ -949,6 +1059,7 @@ fn push(components: &mut Vec<Component>, entry: Entry) {
                 opaque_lookups: false,
                 programs: Vec::new(),
                 path: None,
+                terminal: Vec::new(),
                 csv_headers: true,
             });
         }
@@ -972,6 +1083,35 @@ fn push(components: &mut Vec<Component>, entry: Entry) {
             .and_then(|encoding| encoding.get("include_headers")),
         Some(Value::Bool(false)),
     );
+    let pieces: Vec<Origin> = parts.iter().map(|part| part.origin).collect();
+    let spots: Vec<(String, Origin, Origin)> = parts
+        .iter()
+        .flat_map(|part| {
+            part.spots.iter().map(|(name, range)| {
+                (
+                    name.clone(),
+                    Origin {
+                        file: part.origin.file,
+                        range: *range,
+                    },
+                    part.origin,
+                )
+            })
+        })
+        .collect();
+    let marked = terminal::marked(
+        markers,
+        &terminal::Subject {
+            id: &entry.id,
+            declared: anchor,
+            pieces: &pieces,
+            default_output: outputs.default,
+            named: &outputs.named,
+            spots: &spots,
+        },
+        used,
+        findings,
+    );
     components.push(Component {
         id: entry.id,
         role: entry.role,
@@ -982,7 +1122,8 @@ fn push(components: &mut Vec<Component>, entry: Entry) {
         output_origins,
         default_output: outputs.default,
         file: entry.file,
-        pieces: parts.iter().map(|part| part.origin).collect(),
+        pieces,
+        terminal: marked,
         lookups: found.tables,
         opaque_lookups: found.opaque,
         programs,
@@ -1058,23 +1199,26 @@ fn origins(
     anchor: Origin,
     parts: &[Part],
 ) -> Vec<Origin> {
-    let offered: Vec<(Origin, Vec<String>)> = parts
+    let offered: Vec<(&Part, Vec<String>)> = parts
         .iter()
         .filter(|part| part.origin == anchor)
         .chain(parts.iter().filter(|part| part.origin != anchor))
         .map(|part| {
             let fields = Body(&part.body);
-            (part.origin, outputs::declared(role, component_type, &fields).named)
+            (part, outputs::declared(role, component_type, &fields).named)
         })
         .collect();
 
+    // At the route's own line when the part writes it down — a key of
+    // `route`, a `name` in `routes` — and at the part otherwise, which is all
+    // an output nobody writes (`_unmatched`, `dropped`) has.
     named
         .iter()
         .map(|output| {
             offered
                 .iter()
                 .find(|(_, names)| names.contains(output))
-                .map_or(anchor, |(origin, _)| *origin)
+                .map_or(anchor, |(part, _)| part.spot(output))
         })
         .collect()
 }

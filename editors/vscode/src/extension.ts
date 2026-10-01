@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 
 import { VrlChecker } from './checker';
 import { DiagnosticRunner } from './diagnostics';
+import { registerFindings } from './findings';
 import { registerLanguageFeatures } from './language';
 import { registerRun } from './run';
 import { SampleStore } from './sample';
@@ -65,6 +66,10 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(choice);
 
   context.subscriptions.push(...registerTopology(checker, output, context.extensionUri, choice));
+
+  // The same findings where the config is written: under the text, and in
+  // the Problems panel, with a fix for the one that can be intended.
+  context.subscriptions.push(...registerFindings(checker, output));
 
   // And the way in that does not depend on which file is in front, which is
   // usually the .vrl program rather than the config.

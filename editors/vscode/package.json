@@ -110,6 +110,11 @@
         "title": "Choose pipeline",
         "category": "VRL",
         "icon": "$(list-selection)"
+      },
+      {
+        "command": "vrl-tools.addTerminalOutput",
+        "title": "Mark output as terminal in the settings",
+        "category": "VRL"
       }
     ],
     "menus": {
@@ -153,6 +158,10 @@
         {
           "command": "vrl-tools.revealComponent",
           "when": "false"
+        },
+        {
+          "command": "vrl-tools.addTerminalOutput",
+          "when": "false"
         }
       ]
     },
@@ -181,6 +190,15 @@
           "default": [],
           "scope": "resource",
           "markdownDescription": "The directories your Vector reads its config from, as you pass them to `vector --config-dir`, relative to the workspace folder — for example `config`. The YAML, TOML and JSON files directly in each are merged into one config, as Vector merges them, so one component can be written across files: a router in one, each route added from its own. Read together with `#vrl-tools.vectorConfig#` as one pipeline. The `sources/`, `transforms/`… subfolders of a config directory are not read yet."
+        },
+        "vrl-tools.terminalOutputs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "resource",
+          "markdownDescription": "Outputs that are meant to end where they are: nothing reads them, on purpose. Each entry is an output as an input would name it (`route_by_product._unmatched`) or a component (`dropped-handler`, every output it has), with the wildcards `inputs` takes (`*._unmatched`). The graph draws these as an end instead of reporting \"nothing reads …\". The same can be said in the config itself, with a `# vrl-tools: terminal` comment on the line that declares the component or the route — add `_unmatched` or `dropped` after it for an output that has no line of its own. Vector knows nothing of either and still prints its own warning."
         }
       }
     },

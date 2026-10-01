@@ -17,13 +17,14 @@ pub mod lookups;
 pub mod outputs;
 pub mod render;
 pub mod tables;
+mod terminal;
 mod vars;
 
 pub use config::{
     read_toml, read_toml_enrichment_tables, read_yaml, read_yaml_enrichment_tables, Component,
     ConfigError, Document, Input, Role,
 };
-pub use graph::{build, focus, Edge, Finding, Graph, Severity};
+pub use graph::{build, focus, Edge, Finding, Graph, Mark, Severity, Unread};
 pub use layout::{arrange, clusters, layout, Cluster, Layout, Placement, Route, Slot};
 pub use render::{diagram, document, document_of_files};
 pub use tables::{Lookup, Table};
@@ -115,6 +116,10 @@ pub struct Analysis {
     /// The components with a lookup whose table only the compiler can name.
     /// While there are any, "nothing reads this table" is not certain.
     pub opaque_lookups: Vec<String>,
+    /// The outputs nothing reads that are marked as ending on purpose.
+    pub terminal: Vec<String>,
+    /// The outputs nothing reads that are not, with where a mark would go.
+    pub unread: Vec<Unread>,
 }
 
 /// How to read a pipeline, beyond which files it is.
@@ -129,6 +134,10 @@ pub struct Options {
     /// The VRL programs the config names by path (`remap`'s `file` and
     /// `files`), read by the caller: this crate opens no files.
     pub programs: Vec<Program>,
+    /// Outputs that end on purpose, as patterns over `component.output` or
+    /// `component`, with the wildcards `inputs` takes. What a
+    /// `# vrl-tools: terminal` comment says from inside the config.
+    pub terminal_outputs: Vec<String>,
 }
 
 /// A VRL program kept in a file of its own.
@@ -196,6 +205,8 @@ pub fn analyse(source: &str, format: Format, title: &str) -> Result<Analysis, Co
         lookups: Vec::new(),
         programs: programs_of(&graph.components, &[]),
         opaque_lookups: opaque(&graph.components),
+        terminal: graph.terminal,
+        unread: graph.unread,
         components: graph.components,
         edges: graph.edges,
         findings: graph.findings,
@@ -264,6 +275,7 @@ pub fn analyse_files_focused(files: &[ConfigFile], title: &str, focus: Option<&s
 pub fn analyse_pipeline(files: &[ConfigFile], title: &str, options: &Options) -> Analysis {
     let focus = options.focus.as_deref();
     let mut entries = Vec::new();
+    let mut markers = Vec::new();
     let mut relaxed_wildcards = false;
     let mut unreadable = Vec::new();
 
@@ -283,6 +295,10 @@ pub fn analyse_pipeline(files: &[ConfigFile], title: &str, options: &Options) ->
                         .into_iter()
                         .map(|entry| entry.in_file(position, directory, file.standalone)),
                 );
+                markers.extend(read.markers.into_iter().map(|mut marker| {
+                    marker.file = position;
+                    marker
+                }));
                 // Vector merges the globals of every file it is given, so one
                 // file relaxing wildcard matching relaxes it for the pipeline.
                 // Erring towards relaxed keeps a setting this crate cannot see
@@ -298,7 +314,7 @@ pub fn analyse_pipeline(files: &[ConfigFile], title: &str, options: &Options) ->
     }
 
     let names: Vec<String> = files.iter().map(|file| file.name.clone()).collect();
-    let (mut components, findings) = config::assemble(entries, &names);
+    let (mut components, findings) = config::assemble(entries, &names, &markers);
 
     // What a program kept in a file looks up belongs to the component that
     // runs it, exactly as if it were written inline.
@@ -320,6 +336,7 @@ pub fn analyse_pipeline(files: &[ConfigFile], title: &str, options: &Options) ->
         components,
         relaxed_wildcards,
         findings,
+        terminal: options.terminal_outputs.clone(),
     });
     // About the whole pipeline, whatever is drawn of it: narrowing the graph
     // to one component does not make the other readers of a table go away.
@@ -360,6 +377,8 @@ pub fn analyse_pipeline(files: &[ConfigFile], title: &str, options: &Options) ->
             .collect(),
         programs,
         opaque_lookups,
+        terminal: graph.terminal,
+        unread: graph.unread,
         components: graph.components,
         edges: graph.edges,
         findings: graph.findings,
@@ -812,7 +831,8 @@ sinks:
             .map(|origin| analysis.files[origin.file].as_str())
             .collect();
         assert_eq!(from, ["config/a.toml", "config/b.toml", "config/a.toml"]);
-        assert_eq!(r.output_origins[1].range.start.line, 0, "at the piece's header");
+        assert_eq!(r.output_origins[1].range.start.line, 1, "at the route's own name");
+        assert_eq!(r.output_origins[2].range.start.line, 3, "`_unmatched` is written nowhere: at the router");
         assert_eq!(analysis.files[r.file], "config/a.toml");
         assert_eq!(r.pieces.len(), 2);
     }
@@ -1067,6 +1087,226 @@ inputs = [\"a\", \"ok\"]
 
         let ids: Vec<&str> = analysis.components.iter().map(|c| c.id.as_str()).collect();
         assert_eq!(ids, ["in", "ok", "a", "b", "out"]);
+    }
+
+    /// A router with two routes nothing reads, an `_unmatched` nothing reads,
+    /// and a remap whose output nothing reads: four warnings, as Vector gives.
+    fn dead_ends(router: &str, routes: &str, counter: &str) -> String {
+        format!(
+            "[sources.in]\ntype = \"stdin\"\n\n\
+             {router}\ntype = \"exclusive_route\"\ninputs = [\"in\"]\n\n\
+             {routes}\n\
+             {counter}\ntype = \"remap\"\ninputs = [\"in\"]\nsource = \".n = 1\"\n\n\
+             [sinks.out]\ntype = \"console\"\ninputs = [\"in\"]\n"
+        )
+    }
+
+    const ROUTES: &str = "[[transforms.r.routes]]\nname = \"a\"\ncondition = \".x == 1\"\n\n\
+                          [[transforms.r.routes]]\nname = \"b\"\ncondition = \".x == 2\"\n";
+
+    fn unread(analysis: &super::Analysis) -> Vec<&str> {
+        analysis.unread.iter().map(|unread| unread.output.as_str()).collect()
+    }
+
+    fn one(source: &str) -> super::Analysis {
+        analyse_files(&[file("vector.toml", source)], "config")
+    }
+
+    #[test]
+    fn unmarked_every_unread_output_is_a_warning_with_a_place_for_its_mark() {
+        let source = dead_ends("[transforms.r]", ROUTES, "[transforms.count]");
+        let analysis = one(&source);
+
+        assert_eq!(unread(&analysis), ["r.a", "r.b", "r._unmatched", "count"]);
+        assert!(analysis.terminal.is_empty());
+        assert_eq!(analysis.findings.len(), 4);
+        for entry in &analysis.unread {
+            let finding = &analysis.findings[entry.finding];
+            assert_eq!(finding.severity, Severity::Warning);
+            assert!(finding.message.contains(&format!("`{}`", entry.output)), "{}", finding.message);
+        }
+
+        let line = |text: &str| source.lines().position(|line| line == text).unwrap() as u32;
+        let mark = |output: &str| {
+            let mark = &analysis.unread.iter().find(|u| u.output == output).unwrap().mark;
+            (mark.line, mark.name.clone())
+        };
+        // A route has a line of its own, and a short one: the mark goes there.
+        assert_eq!(mark("r.a"), (line("name = \"a\""), None));
+        assert_eq!(mark("r.b"), (line("name = \"b\""), None));
+        // `_unmatched` is written nowhere, so it is named on the router's line.
+        assert_eq!(mark("r._unmatched"), (line("[transforms.r]"), Some("_unmatched".to_owned())));
+        // The only output of a component is the component.
+        assert_eq!(mark("count"), (line("[transforms.count]"), None));
+    }
+
+    #[test]
+    fn a_comment_on_a_components_line_ends_all_its_outputs() {
+        let analysis = one(&dead_ends(
+            "[transforms.r] # vrl-tools: terminal",
+            ROUTES,
+            "[transforms.count]  # vrl-tools: terminal",
+        ));
+
+        assert!(analysis.findings.is_empty(), "{:#?}", analysis.findings);
+        assert_eq!(analysis.terminal, ["r.a", "r.b", "r._unmatched", "count"]);
+        assert!(analysis.unread.is_empty());
+    }
+
+    /// Beside a route, the comment is about that route — on its `name`, or on
+    /// the header above it — and the rest of the router is still reported.
+    #[test]
+    fn a_comment_on_a_routes_line_ends_that_route_alone() {
+        for routes in [
+            ROUTES.replace("name = \"a\"", "name = \"a\" # vrl-tools: terminal"),
+            ROUTES.replacen("[[transforms.r.routes]]", "[[transforms.r.routes]] # vrl-tools: terminal", 1),
+        ] {
+            let analysis = one(&dead_ends("[transforms.r]", &routes, "[transforms.count]"));
+            assert_eq!(analysis.terminal, ["r.a"], "{routes}");
+            assert_eq!(unread(&analysis), ["r.b", "r._unmatched", "count"], "{routes}");
+        }
+    }
+
+    /// An output nobody writes down is named after the marker.
+    #[test]
+    fn a_named_marker_ends_only_what_it_names() {
+        let analysis = one(&dead_ends(
+            "[transforms.r] # vrl-tools: terminal _unmatched, b",
+            ROUTES,
+            "[transforms.count]",
+        ));
+
+        assert_eq!(analysis.terminal, ["r.b", "r._unmatched"]);
+        assert_eq!(unread(&analysis), ["r.a", "count"]);
+    }
+
+    /// The component's own name stands for its default output, which is how
+    /// a remap's is told from its `dropped`.
+    #[test]
+    fn a_components_own_name_marks_its_default_output() {
+        let source = "[sources.in]\ntype = \"stdin\"\n\
+                      [transforms.parse] # vrl-tools: terminal parse\ntype = \"remap\"\ninputs = [\"in\"]\n\
+                      reroute_dropped = true\nsource = \".\"\n\
+                      [sinks.out]\ntype = \"console\"\ninputs = [\"in\"]\n";
+        let analysis = one(source);
+
+        assert_eq!(analysis.terminal, ["parse"]);
+        assert_eq!(unread(&analysis), ["parse.dropped"]);
+
+        let unmarked = one(&source.replace(" # vrl-tools: terminal parse", ""));
+        let mark = &unmarked.unread.iter().find(|u| u.output == "parse").unwrap().mark;
+        assert_eq!(mark.name.as_deref(), Some("parse"), "bare would end `dropped` too");
+    }
+
+    #[test]
+    fn the_marker_is_read_from_yaml_too() {
+        let analysis = analyse_files(
+            &[file(
+                "vector.yaml",
+                "sources:\n  in:\n    type: stdin\n\
+                 transforms:\n  split: # vrl-tools: terminal _unmatched\n    type: route\n    inputs: [in]\n\
+                 \x20   route:\n      errors: '.level == \"error\"' # vrl-tools: terminal\n      warns: '.level == \"warn\"'\n\
+                 sinks:\n  out:\n    type: console\n    inputs: [in]\n",
+            )],
+            "config",
+        );
+
+        assert_eq!(analysis.terminal, ["split.errors", "split._unmatched"]);
+        assert_eq!(unread(&analysis), ["split.warns"]);
+        // A `route` condition can run over several lines, so its mark is not
+        // offered on its own line: it goes on the router's, named.
+        let mark = &analysis.unread[0].mark;
+        assert_eq!((mark.line, mark.name.as_deref()), (4, Some("warns")));
+    }
+
+    /// A router written across files: the comment on a file's piece ends the
+    /// routes that file adds.
+    #[test]
+    fn a_comment_on_a_piece_ends_the_routes_that_piece_adds() {
+        let analysis = analyse_files(
+            &[
+                file(
+                    "config/a.toml",
+                    "[sources.in]\ntype = \"stdin\"\n[transforms.r]\ntype = \"exclusive_route\"\ninputs = [\"in\"]\n\
+                     [sinks.out]\ntype = \"console\"\ninputs = [\"r._unmatched\"]\n",
+                ),
+                file(
+                    "config/b.yaml",
+                    "transforms:\n  r: # vrl-tools: terminal\n    routes:\n      - name: one\n        condition: 'true'\n      - name: two\n        condition: 'true'\n",
+                ),
+                file("config/c.toml", "[[transforms.r.routes]]\nname = \"three\"\ncondition = \"true\"\n"),
+            ],
+            "config",
+        );
+
+        assert_eq!(analysis.terminal, ["r.one", "r.two"]);
+        assert_eq!(unread(&analysis), ["r.three"]);
+        let mark = &analysis.unread[0].mark;
+        assert_eq!((analysis.files[mark.file].as_str(), mark.line), ("config/c.toml", 1));
+    }
+
+    #[test]
+    fn patterns_from_outside_end_outputs_and_whole_components() {
+        let files = [file("vector.toml", &dead_ends("[transforms.r]", ROUTES, "[transforms.count]"))];
+        let with = |patterns: &str| {
+            super::analyse_pipeline(
+                &files,
+                "config",
+                &options(&format!(r#"{{"terminalOutputs":{patterns}}}"#)),
+            )
+        };
+
+        let exact = with(r#"["r._unmatched", "count"]"#);
+        assert_eq!(exact.terminal, ["r._unmatched", "count"]);
+        assert_eq!(unread(&exact), ["r.a", "r.b"]);
+
+        // The same wildcards `inputs` takes, against the output as written.
+        assert_eq!(with(r#"["r.[ab]"]"#).terminal, ["r.a", "r.b"]);
+        assert_eq!(with(r#"["*._unmatched"]"#).terminal, ["r._unmatched"]);
+        // A component's name ends every output it has.
+        assert_eq!(with(r#"["r"]"#).terminal, ["r.a", "r.b", "r._unmatched"]);
+        // Naming something that is not there, or nothing, changes nothing.
+        assert_eq!(with(r#"["nope", ""]"#).findings.len(), 4);
+    }
+
+    /// The mark is about an output nothing reads. On one that is read it is
+    /// not an end, and nothing is drawn as one.
+    #[test]
+    fn a_mark_on_an_output_something_reads_changes_nothing() {
+        let analysis = one(
+            "[sources.in]\ntype = \"stdin\"\n[transforms.parse] # vrl-tools: terminal\ntype = \"remap\"\ninputs = [\"in\"]\n\
+             [sinks.out]\ntype = \"console\"\ninputs = [\"parse\"]\n",
+        );
+        assert!(analysis.terminal.is_empty());
+        assert!(analysis.findings.is_empty());
+    }
+
+    /// A comment that lands on nothing, or names nothing, says so. One that
+    /// silently did nothing would look exactly like one that worked.
+    #[test]
+    fn a_marker_that_marks_nothing_says_so() {
+        let source = dead_ends(
+            "[transforms.r] # vrl-tools: terminal unmatched",
+            ROUTES,
+            "[transforms.count]\n# vrl-tools: terminal",
+        );
+        let analysis = one(&source);
+
+        let notes: Vec<&str> = analysis
+            .findings
+            .iter()
+            .filter(|f| f.severity == Severity::Info)
+            .map(|f| f.message.as_str())
+            .collect();
+        assert_eq!(notes.len(), 2, "{:#?}", analysis.findings);
+        assert!(notes[0].contains("`unmatched` is not an output of `r`"), "{}", notes[0]);
+        assert!(notes[0].contains("`_unmatched`"), "it says what there is: {}", notes[0]);
+        assert!(notes[1].contains("not on the line of a component or of a route"), "{}", notes[1]);
+        assert!(analysis.terminal.is_empty());
+
+        let stray = analysis.findings.iter().find(|f| f.message.contains("not on the line")).unwrap();
+        let line = source.lines().position(|line| line == "# vrl-tools: terminal").unwrap();
+        assert_eq!(stray.range.start.line as usize, line);
     }
 
     const LOOKUPS: &str = "[sources.in]\ntype = \"stdin\"\n\

@@ -26,7 +26,8 @@
     "test:grouping": "tsx scripts/test-grouping.ts",
     "test:pipelines": "tsx scripts/test-pipelines.ts",
     "test:tables": "tsx scripts/test-tables.ts",
-    "test": "npm run test:grammar && npm run test:injection && npm run test:snippets && npm run test:diagnostics && npm run test:analysis && npm run test:grouping && npm run test:pipelines && npm run test:tables",
+    "test:markers": "tsx scripts/test-markers.ts",
+    "test": "npm run test:grammar && npm run test:injection && npm run test:snippets && npm run test:diagnostics && npm run test:analysis && npm run test:grouping && npm run test:pipelines && npm run test:tables && npm run test:markers",
     "package": "npm run build && npm test && npm run package --workspace editors/vscode"
   },
   "devDependencies": {

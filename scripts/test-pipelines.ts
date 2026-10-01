@@ -27,6 +27,7 @@ import {
   shapeOf,
 } from '../editors/vscode/src/grouping.js';
 import type { Shape } from '../editors/vscode/src/grouping.js';
+import { markerEdit, takesComments } from '../editors/vscode/src/markers.js';
 import { consumers, destination, outputsOf, written } from '../editors/vscode/src/outputs.js';
 import { candidates, countRows } from '../editors/vscode/src/tablefiles.js';
 import { errorsIn, pipeline, topology, topologyFiles } from './checker-harness.js';
@@ -476,6 +477,77 @@ check(
     fleet.document.split('\n').filter((line) => / --> .*`$/.test(line)).length,
   ],
   [true, true, true, true, true, fleet.edges.length],
+);
+
+// The three outputs that end on purpose, said the two ways they can be.
+const TERMINAL = ['normalize-router.imposible', 'route_by_product._unmatched', 'dropped-handler'];
+const settled = readWhole(fleetFiles, 'fleet/config', { terminalOutputs: TERMINAL });
+check(
+  'fleet/config: with vrl-tools.terminalOutputs set, there is nothing left to report',
+  { findings: settled.findings.map((finding) => finding.message), terminal: [...settled.terminal].sort() },
+  { findings: [], terminal: [...TERMINAL].sort() },
+);
+check(
+  'fleet/config: a pattern does the same for every router at once',
+  readWhole(fleetFiles, 'fleet/config', { terminalOutputs: ['*._unmatched'] }).findings.map(
+    (finding) => finding.message,
+  ),
+  UNREAD.filter((message) => !message.includes('_unmatched')).map((message) => message.replace('warning: ', '')),
+);
+check(
+  'fleet/config: without it the same three warnings are back, each saying where its mark goes',
+  fleet.unread.map((entry) => [
+    entry.output,
+    `${fleet.files[entry.mark.file]}:${entry.mark.line + 1}`,
+    entry.mark.name,
+  ]),
+  [
+    ['route_by_product._unmatched', 'fleet/config/topology.toml:1', '_unmatched'],
+    // A route has a line of its own: its name.
+    ['normalize-router.imposible', 'fleet/config/normalize-router.toml:7', null],
+    ['dropped-handler', 'fleet/config/base.toml:19', null],
+  ],
+);
+
+// The Quick Fix, start to finish: write the comment where the analysis says,
+// the way `findings.ts` does, and read the pipeline again.
+const lines = new Map(fleetFiles.map((file) => [file.name, file.source.split('\n')]));
+const inserted: string[] = [];
+for (const entry of fleet.unread) {
+  const name = fleet.files[entry.mark.file] ?? '';
+  const text = lines.get(name);
+  const edit = text && takesComments(name) ? markerEdit(text[entry.mark.line] ?? '', entry.mark.name) : undefined;
+  if (text && edit) {
+    const line = text[entry.mark.line] ?? '';
+    text[entry.mark.line] = line.slice(0, edit.at) + edit.text + line.slice(edit.at);
+    inserted.push(text[entry.mark.line].trim());
+  }
+}
+check('fleet/config: the Quick Fix has a comment to write for each of the three', inserted, [
+  '[transforms.route_by_product] # vrl-tools: terminal _unmatched',
+  'name = "imposible" # vrl-tools: terminal',
+  '[transforms.dropped-handler] # vrl-tools: terminal',
+]);
+const commented = readWhole(
+  fleetFiles.map((file) => ({ ...file, source: (lines.get(file.name) ?? []).join('\n') })),
+  'fleet/config',
+);
+check(
+  'fleet/config: and with the comments written, there is nothing left to report',
+  {
+    unreadable: commented.unreadable,
+    findings: commented.findings.map((finding) => finding.message),
+    terminal: [...commented.terminal].sort(),
+  },
+  { unreadable: [], findings: [], terminal: [...TERMINAL].sort() },
+);
+check(
+  'fleet/config: an output that ends on purpose says so in the sidebar',
+  [
+    destination(consumers(settled.edges).get('dropped-handler'), settled.terminal.includes('dropped-handler')),
+    destination(undefined, false),
+  ],
+  ['⊣ terminal', '(unread)'],
 );
 
 // ------------------------------------------------------------ the VRL in them

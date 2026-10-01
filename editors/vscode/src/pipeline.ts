@@ -33,9 +33,15 @@ export const PIPELINE_SETTING = 'vectorConfig';
 /** The `--config-dir` directories. See [`PIPELINE_SETTING`]. */
 export const PIPELINE_DIR_SETTING = 'vectorConfigDir';
 
-/** Whether a settings change changes which files are the pipeline. */
+/** Outputs that end on purpose. See `vector_topology::terminal`. */
+export const TERMINAL_SETTING = 'terminalOutputs';
+
+/**
+ * Whether a settings change changes what is said about the pipeline: which
+ * files it is, or how they are read.
+ */
 export function affectsPipeline(event: vscode.ConfigurationChangeEvent): boolean {
-  return [PIPELINE_SETTING, PIPELINE_DIR_SETTING].some((setting) =>
+  return [PIPELINE_SETTING, PIPELINE_DIR_SETTING, TERMINAL_SETTING].some((setting) =>
     event.affectsConfiguration(`vrl-tools.${setting}`),
   );
 }

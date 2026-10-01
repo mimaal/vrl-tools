@@ -74,6 +74,33 @@ source at the pin.
   the sources its events come from (`input-http`, `vector-metrics`); the
   Mermaid export frames them as subgraphs. Connected means by an arrow: a
   table two parts both read does not make them one.
+- **An output can be marked as ending on purpose.** The fixture's three
+  warnings are all intended — a router's `_unmatched` that is meant to be
+  dropped, a tripwire route, a transform that only counts — and warnings that
+  never go away are how a real one gets missed. Two ways to say so. In the
+  config, a comment on the line the thing is written on:
+  `[transforms.dropped-handler] # vrl-tools: terminal` marks every output of a
+  component, the same comment beside a route (its `name`, its key under
+  `route`, or the `[[…routes]]` header) marks that route, and an output with
+  no line of its own is named after it — `# vrl-tools: terminal _unmatched`.
+  Or outside it, in `vrl-tools.terminalOutputs`, as patterns over
+  `component.output` or `component` with the wildcards `inputs` takes
+  (`"*._unmatched"`). A marked output is drawn as an end, ⊣, in the graph and
+  the sidebar, and is not reported. On the fixture either way leaves nothing
+  to report; without them the same three warnings as before come back. Vector
+  itself knows nothing of this and still prints its warning. A comment that
+  lands on no component or route, or names an output that does not exist, is
+  an `info` finding saying so, rather than a mark that silently does nothing.
+- **The graph's findings are in the Problems panel**, under the text they are
+  about, for the pipeline the config in front belongs to. They were only in
+  the graph and the sidebar. "Nothing reads …" has two Quick Fixes: one writes
+  the comment, on the line the analysis says can take it (never one that opens
+  or closes a multi-line string), the other adds the output to
+  `vrl-tools.terminalOutputs`, which is the only one offered for a JSON
+  config.
+- **A route opens at its own line.** Each named output already carried the
+  file that added it; it now carries the line the route is written on, so
+  clicking a route goes to its `name`, not to the top of the file's piece.
 
 ## 0.7.2 — 2026-09-28
 

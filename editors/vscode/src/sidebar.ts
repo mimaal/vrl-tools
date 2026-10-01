@@ -388,6 +388,11 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
     }
   }
 
+  /** Whether an output, as written, is marked as ending on purpose. */
+  private terminal(written: string): boolean {
+    return this.read?.analysis.terminal.includes(written) ?? false;
+  }
+
   private findingsOf(component: TopologyComponent): TopologyFinding[] {
     return this.read?.findingsOf.get(component.id) ?? [];
   }
@@ -605,7 +610,7 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
       outputs.length === 0
         ? ''
         : outputs.length === 1 && outputs[0] === null
-          ? ` ${destination(this.read?.consumers.get(component.id))}`
+          ? ` ${destination(this.read?.consumers.get(component.id), this.terminal(component.id))}`
           : ` · ${outputs.length} outputs`;
     item.description = `${component.type || 'no type'}${going}`;
 
@@ -662,16 +667,24 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
 
     // The whole name, not the port: three routers each have a `_unmatched`,
     // and this is the string an input would be written with.
+    const ends = this.terminal(name);
+    const fate = readers
+      ? `Read by ${readers.join(', ')}.`
+      : ends
+        ? 'Nothing reads it, and it is marked as ending here on purpose.'
+        : 'Nothing reads it.';
     const item = new vscode.TreeItem(name);
-    item.description = `${destination(readers)} · ${place}`;
-    item.iconPath = new vscode.ThemeIcon(
-      readers ? 'arrow-right' : 'circle-slash',
-      readers ? undefined : new vscode.ThemeColor('list.warningForeground'),
-    );
+    item.description = `${destination(readers, ends)} · ${place}`;
+    // An end that is meant is not a warning, and is not drawn as one.
+    item.iconPath = readers
+      ? new vscode.ThemeIcon('arrow-right')
+      : ends
+        ? new vscode.ThemeIcon('debug-stop', new vscode.ThemeColor('descriptionForeground'))
+        : new vscode.ThemeIcon('circle-slash', new vscode.ThemeColor('list.warningForeground'));
     item.tooltip =
       output === null
-        ? `The default output of \`${component.id}\`: what an input naming \`${component.id}\` reads. ${readers ? `Read by ${readers.join(', ')}.` : 'Nothing reads it.'}`
-        : `Output \`${output}\` of \`${component.id}\`, added in ${files[origin.file] ?? 'this file'}. ${readers ? `Read by ${readers.join(', ')}.` : 'Nothing reads it.'}`;
+        ? `The default output of \`${component.id}\`: what an input naming \`${component.id}\` reads. ${fate}`
+        : `Output \`${output}\` of \`${component.id}\`, added in ${files[origin.file] ?? 'this file'}. ${fate}`;
     if (file) {
       item.command = {
         command: 'vscode.open',

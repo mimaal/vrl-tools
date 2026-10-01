@@ -136,6 +136,10 @@ export interface Topology {
   readonly programs: readonly TopologyProgram[];
   /** The components with a lookup whose table only the compiler can name. */
   readonly opaqueLookups: readonly string[];
+  /** The outputs nothing reads that are marked as ending on purpose, as written. */
+  readonly terminal: readonly string[];
+  /** The outputs nothing reads that are not, each with its finding and where a mark would go. */
+  readonly unread: readonly TopologyUnread[];
   /** Where each drawn component goes, and the lanes long arrows take. */
   readonly layout: {
     readonly components: readonly TopologyPlacement[];
@@ -168,6 +172,20 @@ export interface TopologyTable {
   readonly readers: readonly string[];
 }
 
+/** An output nothing reads, and where the comment accepting that goes. */
+export interface TopologyUnread {
+  /** As an input would name it. */
+  readonly output: string;
+  /** Index into `Topology.findings`. */
+  readonly finding: number;
+  readonly mark: {
+    readonly file: number;
+    readonly line: number;
+    /** The name to write after the marker, when the line does not say which output. */
+    readonly name: string | null;
+  };
+}
+
 /** A VRL program a `remap` reads from a file. */
 export interface TopologyProgram {
   readonly component: string;
@@ -186,6 +204,8 @@ export interface PipelineOptions {
   readonly showTables?: boolean;
   /** The VRL programs the config names by path, read by the caller. */
   readonly programs?: readonly { readonly path: string; readonly source: string }[];
+  /** Outputs that end on purpose: patterns over `component.output` or `component`. */
+  readonly terminalOutputs?: readonly string[];
 }
 
 export interface TopologyPlacement {
