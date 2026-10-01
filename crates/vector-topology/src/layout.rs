@@ -205,8 +205,8 @@ pub fn clusters(graph: &Graph, drawing: &Drawing) -> Vec<Cluster> {
     }
     // A table drawn with no reader drawn has nowhere to go but a part of its
     // own. `tables::drawing` never produces one; `Drawing::everything` does.
-    for position in 0..count {
-        if drawn(position) && attached(position) && !taken[position] {
+    for (position, &taken) in taken.iter().enumerate() {
+        if drawn(position) && attached(position) && !taken {
             parts.push(vec![position]);
         }
     }

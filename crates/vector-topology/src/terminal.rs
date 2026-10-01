@@ -98,8 +98,7 @@ pub(crate) fn markers(source: &str) -> Vec<Marker> {
 fn marker_start(line: &str) -> Option<usize> {
     line.match_indices('#')
         .map(|(position, _)| position)
-        .filter(|&position| line[position + 1..].trim_start().starts_with(MARK))
-        .next_back()
+        .rfind(|&position| line[position + 1..].trim_start().starts_with(MARK))
 }
 
 /// What of a component a marker can land on.
