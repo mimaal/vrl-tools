@@ -46,9 +46,15 @@ export async function readPipeline(
       componentNamePattern: namePatterns(settings.get(NAME_PATTERN_SETTING)),
     });
 
-  let analysis = await read(WANTED.get(pipeline.key) ?? []);
+  const asked = WANTED.get(pipeline.key) ?? [];
+  let analysis = await read(asked);
   const wanted = analysis.programs.map(({ path, file }) => ({ path, file }));
-  if (analysis.programs.some((program) => !program.read)) {
+  // Again only for a program that was not looked for the first time. One
+  // that was, and is not in the workspace, will not be there now either.
+  const unasked = analysis.programs.some(
+    (program) => !program.read && !asked.some((known) => known.path === program.path),
+  );
+  if (unasked) {
     analysis = await read(wanted);
   }
   WANTED.set(pipeline.key, wanted);
