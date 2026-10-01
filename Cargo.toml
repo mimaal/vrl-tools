@@ -37,6 +37,9 @@ vector-vrl-functions = { git = "https://github.com/vectordotdev/vector", tag = "
 enrichment = { git = "https://github.com/vectordotdev/vector", tag = "v0.58.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Already in the graph through `vrl`; named here for the one place the
+# topology reader matches a pattern somebody wrote in a setting.
+regex = "1"
 
 [profile.release]
 # The .wasm ships inside the .vsix, so size beats speed: VRL compiles a program

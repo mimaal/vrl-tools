@@ -199,6 +199,15 @@
           "default": [],
           "scope": "resource",
           "markdownDescription": "Outputs that are meant to end where they are: nothing reads them, on purpose. Each entry is an output as an input would name it (`route_by_product._unmatched`) or a component (`dropped-handler`, every output it has), with the wildcards `inputs` takes (`*._unmatched`). The graph draws these as an end instead of reporting \"nothing reads …\". The same can be said in the config itself, with a `# vrl-tools: terminal` comment on the line that declares the component or the route — add `_unmatched` or `dropped` after it for an output that has no line of its own. Vector knows nothing of either and still prints its own warning."
+        },
+        "vrl-tools.componentNamePattern": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "scope": "resource",
+          "markdownDescription": "A naming convention for the components of a pipeline, off unless set: a regular expression per component `type` that the names of components of that type should match, for example `{ \"remap\": \"^[a-z0-9_]+-normalizer$\" }`. A name that does not match is reported as information, never as a warning — Vector runs the config whatever a component is called. The expressions are unanchored unless they anchor themselves, and have no lookaround or backreferences."
         }
       }
     },

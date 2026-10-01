@@ -29,6 +29,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 use editor_text::Range;
 
 use crate::config::{Component, Document, Role};
+use crate::naming;
 use crate::terminal;
 
 /// How much a finding matters.
@@ -122,6 +123,7 @@ pub fn build(document: Document) -> Graph {
         relaxed_wildcards,
         findings,
         terminal: terminal_patterns,
+        name_patterns,
     } = document;
 
     let mut edges = Vec::new();
@@ -202,6 +204,9 @@ pub fn build(document: Document) -> Graph {
     drop(written);
     drop(index);
     let (components, edges) = reordered(components, edges, &order);
+    // Last, in the order just settled, and only when asked for: a convention
+    // is the team's, not Vector's.
+    findings.extend(naming::check(&components, &name_patterns));
 
     Graph {
         components,

@@ -113,6 +113,33 @@ Free and open source. Full phased plan lives in @docs/PLAN.md.
   offers outputs. A table is exempt from the "has no inputs" check exactly as
   in Vector, whose `check_shape` runs before tables join the sinks.
 
+- An enrichment table nothing flows through is **listed, not drawn**: it
+  stays in `Analysis.components` (the grouping counts its name) and gets no
+  place in `layout`. Who reads it comes from the literal table names in the
+  two lookup calls (`lookups.rs`), read out of every string of a component
+  and out of the programs a `remap` names with `file`/`files`, which the
+  extension finds and hands over (`reading.ts`) because the wasm module opens
+  no files. "Unused" is never a finding: Vector warns about nothing of the
+  kind, and it accepts a table named through a variable, so a lookup that is
+  not a literal is reported as opaque rather than as no reader.
+
+- What is drawn is split into **clusters**, the parts no arrow joins
+  (`layout::clusters`), and components are handed on in **flow order**
+  (`graph::flow_order`): sources, transforms after what feeds them, sinks,
+  tables, by name where that leaves a choice. Both are decided in the crate
+  so the sidebar, the webview and the Mermaid export cannot disagree.
+
+- An unread output can be **terminal** — meant to end there — by a
+  `# vrl-tools: terminal` comment or `vrl-tools.terminalOutputs`
+  (`terminal.rs`). This is the editor's own notion: Vector still warns. The
+  Quick Fix only writes where `graph::mark_for` says a comment is safe, and
+  `markers.ts` refuses a line with a multi-line string delimiter on it.
+
+- `routes.rs` warns about a route an earlier one hides, for **one textual
+  shape and nothing else**: `==` comparisons of paths and literals joined by
+  `&&`. Do not widen it to "probably hidden"; the narrowness is what makes it
+  free of false positives. `vector test` confirmed the first-match rule.
+
 - Vector warns about an **output** with no consumers, not a component
   (`validation::warnings` builds `OutputId`s). A `route` with three routes
   wired to one sink is not an orphan and is still throwing two thirds of its
@@ -267,9 +294,12 @@ Free and open source. Full phased plan lives in @docs/PLAN.md.
   `test:diagnostics` compiles the corpus, including every block the injection
   grammars paint as VRL inside a Vector config. Anything this repo shows as
   valid VRL has to be accepted by the pinned compiler. `test:analysis` covers
-  `editors/vscode/src/analysis.ts`, which is the only hand-written reader of
-  VRL in the project — it answers "where is the cursor", never "is this
-  valid" — and is therefore the only one the compiler cannot keep honest.
+  `editors/vscode/src/analysis.ts`, a hand-written reader of VRL — it answers
+  "where is the cursor", never "is this valid" — which the compiler therefore
+  cannot keep honest. The crate has two more, each with unit tests of its own
+  for the same reason: `crates/vector-topology/src/lookups.rs` ("which tables
+  does this program name") and `routes.rs` ("is this condition a plain
+  conjunction of comparisons").
   `test:grouping` covers `editors/vscode/src/grouping.ts` for the same reason:
   no amount of compiling VRL says whether two folders are one pipeline.
   `test:pipelines` walks `test-corpus/pipelines/` from the disk through the

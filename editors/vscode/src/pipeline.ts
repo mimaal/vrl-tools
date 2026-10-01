@@ -36,12 +36,15 @@ export const PIPELINE_DIR_SETTING = 'vectorConfigDir';
 /** Outputs that end on purpose. See `vector_topology::terminal`. */
 export const TERMINAL_SETTING = 'terminalOutputs';
 
+/** A naming convention for components, by type. See `vector_topology::naming`. */
+export const NAME_PATTERN_SETTING = 'componentNamePattern';
+
 /**
  * Whether a settings change changes what is said about the pipeline: which
  * files it is, or how they are read.
  */
 export function affectsPipeline(event: vscode.ConfigurationChangeEvent): boolean {
-  return [PIPELINE_SETTING, PIPELINE_DIR_SETTING, TERMINAL_SETTING].some((setting) =>
+  return [PIPELINE_SETTING, PIPELINE_DIR_SETTING, TERMINAL_SETTING, NAME_PATTERN_SETTING].some((setting) =>
     event.affectsConfiguration(`vrl-tools.${setting}`),
   );
 }

@@ -71,6 +71,30 @@ language used by [Vector](https://vector.dev).
   Clicking a component opens the file it is declared in, and a name used in
   two files is marked in both, as Vector would refuse it.
 
+  Enrichment tables are listed, not drawn: a pipeline can have hundreds, and
+  no arrow touches one. The sidebar collapses them into one row, grouped by
+  the file that declares them, each saying which components' VRL reads it —
+  or that nothing in this pipeline does — with its CSV and its row count.
+  **Show tables** draws the ones the components on screen read. Parts of a
+  config that share no arrow, such as Vector's own metrics beside the
+  pipeline, are drawn as bands of their own, and an `exclusive_route`'s routes
+  are numbered in the order they are tried, with a warning for one an earlier
+  route hides.
+
+  An output that is *meant* to end where it is can be marked, so it stops
+  being reported: a comment on the line that declares the component or the
+  route,
+
+  ```toml
+  [transforms.route_by_product] # vrl-tools: terminal _unmatched
+  ```
+
+  or, outside the config, `"vrl-tools.terminalOutputs": ["*._unmatched",
+  "dropped-handler"]`. The findings are in the Problems panel too, and
+  "nothing reads …" has a Quick Fix for either. A team with a naming
+  convention can have it checked with `vrl-tools.componentNamePattern`, for
+  example `{ "remap": "-normalizer$" }`.
+
   ![The pipeline graph of a Vector config, with the path through one transform highlighted](https://raw.githubusercontent.com/mimaal/vrl-tools/main/editors/vscode/media/pipeline-graph.png)
 
 - **Hover, completion and signature help, generated from the compiler.** Hover

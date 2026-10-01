@@ -217,6 +217,9 @@ pub struct Document {
     /// Patterns naming outputs that end on purpose, from outside the config.
     /// See [`crate::terminal`].
     pub terminal: Vec<String>,
+    /// A naming convention to hold component names to, by component type.
+    /// Empty unless somebody asked for one. See [`crate::naming`].
+    pub name_patterns: Vec<(String, String)>,
 }
 
 /// Why a config could not be read at all.
@@ -306,6 +309,7 @@ impl Entries {
             relaxed_wildcards: self.relaxed_wildcards,
             findings,
             terminal: Vec::new(),
+            name_patterns: Vec::new(),
         }
     }
 }

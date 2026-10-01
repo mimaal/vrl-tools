@@ -3932,6 +3932,7 @@ name = "vector-topology"
 version = "0.1.0"
 dependencies = [
  "editor-text",
+ "regex",
  "saphyr",
  "serde",
  "serde_json",

@@ -628,6 +628,19 @@ check(
   ['⊣ terminal', '(unread)'],
 );
 
+// The naming rule, which is off unless asked for.
+check(
+  'fleet/config: with a name pattern for remaps, the ones that break it are notes, and nothing else changes',
+  readWhole(fleetFiles, 'fleet/config', {
+    terminalOutputs: TERMINAL,
+    componentNamePattern: { remap: '^[a-z0-9-]+-normalizer$' },
+  }).findings.map((finding) => `${finding.severity}: ${finding.message}`),
+  [
+    'info: `dropped-handler` does not match the name pattern for `remap` components, `^[a-z0-9-]+-normalizer$`',
+    'info: `time-diff` does not match the name pattern for `remap` components, `^[a-z0-9-]+-normalizer$`',
+  ],
+);
+
 // ------------------------------------------------------------ the VRL in them
 
 // What this corpus shows as VRL has to be VRL the pinned compiler accepts,

@@ -14,6 +14,7 @@ pub mod config;
 pub mod graph;
 pub mod layout;
 pub mod lookups;
+mod naming;
 pub mod outputs;
 pub mod render;
 pub mod routes;
@@ -139,6 +140,10 @@ pub struct Options {
     /// `component`, with the wildcards `inputs` takes. What a
     /// `# vrl-tools: terminal` comment says from inside the config.
     pub terminal_outputs: Vec<String>,
+    /// A regular expression the names of the components of a type should
+    /// match, by type: `{"remap": "-normalizer$"}`. A name that does not is
+    /// an `info` finding. Empty, which is the default, checks nothing.
+    pub component_name_pattern: std::collections::BTreeMap<String, String>,
 }
 
 /// A VRL program kept in a file of its own.
@@ -338,6 +343,11 @@ pub fn analyse_pipeline(files: &[ConfigFile], title: &str, options: &Options) ->
         relaxed_wildcards,
         findings,
         terminal: options.terminal_outputs.clone(),
+        name_patterns: options
+            .component_name_pattern
+            .iter()
+            .map(|(kind, pattern)| (kind.clone(), pattern.clone()))
+            .collect(),
     });
     // About the whole pipeline, whatever is drawn of it: narrowing the graph
     // to one component does not make the other readers of a table go away.
@@ -1395,6 +1405,72 @@ inputs = [\"a\", \"ok\"]
               product.toml, and its condition holds whenever this one does"],
         );
         assert_eq!(analysis.files[analysis.findings[0].file], "config/product.toml");
+    }
+
+    const NAMED: &str = "[sources.in]\ntype = \"stdin\"\n\
+        [transforms.acme_fw-normalizer]\ntype = \"remap\"\ninputs = [\"in\"]\nsource = \".\"\n\
+        [transforms.fixup]\ntype = \"remap\"\ninputs = [\"in\"]\nsource = \".\"\n\
+        [transforms.keep]\ntype = \"filter\"\ninputs = [\"in\"]\ncondition = \"true\"\n\
+        [sinks.out]\ntype = \"console\"\ninputs = [\"*-normalizer\", \"fixup\", \"keep\"]\n";
+
+    fn named(patterns: &str) -> super::Analysis {
+        super::analyse_pipeline(
+            &[file("vector.toml", NAMED)],
+            "config",
+            &options(&format!(r#"{{"componentNamePattern":{patterns}}}"#)),
+        )
+    }
+
+    /// Off unless asked for: a naming convention is the team's, not Vector's.
+    #[test]
+    fn names_are_not_checked_unless_a_pattern_is_given() {
+        assert!(analyse_files(&[file("vector.toml", NAMED)], "config").findings.is_empty());
+        assert!(named("{}").findings.is_empty());
+    }
+
+    /// The components of the type the pattern is for, and only those; a note,
+    /// at the component, since Vector runs it whatever it is called.
+    #[test]
+    fn a_name_that_breaks_the_pattern_for_its_type_is_a_note() {
+        let analysis = named(r#"{"remap": "^[a-z0-9_]+-normalizer$"}"#);
+
+        assert_eq!(
+            messages(&analysis),
+            ["`fixup` does not match the name pattern for `remap` components, `^[a-z0-9_]+-normalizer$`"],
+        );
+        let finding = &analysis.findings[0];
+        assert_eq!(finding.severity, Severity::Info);
+        let fixup = analysis.components.iter().find(|c| c.id == "fixup").unwrap();
+        assert_eq!((finding.file, finding.range), (fixup.file, fixup.range));
+    }
+
+    #[test]
+    fn each_type_has_its_own_pattern() {
+        let analysis = named(r#"{"remap": "normalizer$", "filter": "^only-", "console": "^out$"}"#);
+        assert_eq!(
+            messages(&analysis),
+            [
+                "`fixup` does not match the name pattern for `remap` components, `normalizer$`",
+                "`keep` does not match the name pattern for `filter` components, `^only-`",
+            ],
+        );
+    }
+
+    /// A pattern that is not a regular expression is said once, rather than
+    /// matching nothing and looking like a convention everybody follows.
+    #[test]
+    fn a_pattern_that_does_not_compile_says_so_once() {
+        let analysis = named(r#"{"remap": "(-normalizer"}"#);
+
+        assert_eq!(analysis.findings.len(), 1, "{:#?}", analysis.findings);
+        assert_eq!(analysis.findings[0].severity, Severity::Info);
+        assert!(
+            analysis.findings[0]
+                .message
+                .starts_with("the name pattern for `remap` components, `(-normalizer`, is not a regular expression"),
+            "{}",
+            analysis.findings[0].message,
+        );
     }
 
     const LOOKUPS: &str = "[sources.in]\ntype = \"stdin\"\n\

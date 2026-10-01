@@ -206,6 +206,8 @@ export interface PipelineOptions {
   readonly programs?: readonly { readonly path: string; readonly source: string }[];
   /** Outputs that end on purpose: patterns over `component.output` or `component`. */
   readonly terminalOutputs?: readonly string[];
+  /** A regular expression component names should match, by component type. */
+  readonly componentNamePattern?: Readonly<Record<string, string>>;
 }
 
 export interface TopologyPlacement {

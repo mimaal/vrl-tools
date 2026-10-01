@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import * as vscode from 'vscode';
 
 import type { PipelineOptions, Topology, TopologyTable, VrlChecker } from './checker';
-import { sameFile, TERMINAL_SETTING } from './pipeline';
+import { NAME_PATTERN_SETTING, sameFile, TERMINAL_SETTING } from './pipeline';
 import type { Pipeline } from './pipeline';
 import { candidates, countRows } from './tablefiles';
 
@@ -36,13 +36,14 @@ export async function readPipeline(
     standalone: file.standalone,
   }));
   // The folder's settings, since they say things about this pipeline: which
-  // of its outputs end on purpose.
+  // of its outputs end on purpose, and what its components should be called.
   const settings = vscode.workspace.getConfiguration('vrl-tools', pipeline.files[0]?.uri);
   const read = async (wanted: readonly { path: string; file: number }[]) =>
     checker.pipeline(files, pipeline.title, {
       ...options,
       programs: await programs(pipeline, wanted),
       terminalOutputs: settings.get<string[]>(TERMINAL_SETTING, []),
+      componentNamePattern: namePatterns(settings.get(NAME_PATTERN_SETTING)),
     });
 
   let analysis = await read(WANTED.get(pipeline.key) ?? []);
@@ -52,6 +53,22 @@ export async function readPipeline(
   }
   WANTED.set(pipeline.key, wanted);
   return analysis;
+}
+
+/**
+ * The setting as the module takes it: type to pattern, strings only. A
+ * settings file is edited by hand, and a number where a pattern should be is
+ * a typo to ignore rather than a reason to draw no graph.
+ */
+function namePatterns(setting: unknown): Record<string, string> {
+  if (typeof setting !== 'object' || setting === null) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(setting).filter(
+      (entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1] !== '',
+    ),
+  );
 }
 
 /** The programs that can be found, as the module wants them. */

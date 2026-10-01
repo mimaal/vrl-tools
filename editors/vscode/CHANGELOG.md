@@ -19,8 +19,11 @@ source at the pin.
 
 - **Enrichment tables are listed, not drawn.** On the fixture the graph placed
   384 nodes, 372 of them tables joined to nothing; it now places 12, and the
-  webview draws it in 24 ms instead of 198 (median of 15 redraws in headless
-  Chrome; the analysis itself stays at ~27 ms). A table nothing flows through
+  webview draws it in 23 ms instead of 170 to 198 (median of 15 redraws in
+  headless Chrome, 0.7.2's script and analysis against these; with the four
+  tables shown, 25 ms). The analysis itself, with everything below added, went
+  from 27 ms to 29 ms per read, and the wasm module from 6.51 MB to 6.58 MB.
+  A table nothing flows through
   — every kind but a `memory` table with `inputs` or a `source_config` — is
   left out of the picture and collapsed into one "Enrichment tables (372)" row
   in the sidebar, grouped by the file that declares it. Each table says who
@@ -120,6 +123,13 @@ source at the pin.
   comparison of the earlier route is among the later one's; anything else —
   `||`, a function call, `!=`, parentheses, a non-VRL condition — is not read,
   and nothing is said about it.
+- **`vrl-tools.componentNamePattern`, a naming rule for those who have one.**
+  Off by default. Set to a regular expression per component type —
+  `{ "remap": "^[a-z0-9_]+-normalizer$" }` — it reports each component of that
+  type whose name does not match, as information: Vector runs the config
+  whatever a component is called, but an input written `*-normalizer` silently
+  skips the remap that was named differently. A pattern that is not a regular
+  expression is reported once instead of matching nothing.
 
 ## 0.7.2 — 2026-09-28
 
