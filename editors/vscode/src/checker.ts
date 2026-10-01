@@ -120,7 +120,23 @@ export interface Topology {
     readonly message: string;
     readonly range: VrlRange | null;
   }[];
-  /** Where each component goes when drawn, and the lanes long arrows take. */
+  /**
+   * Every enrichment table of the pipeline and who reads it, whatever the
+   * graph is narrowed to. Tables nothing flows through are in `components`
+   * and not in `layout`: they are listed, not drawn.
+   */
+  readonly tables: readonly TopologyTable[];
+  /** The lookups drawn, when the tables were asked for: a table and a reader of it. */
+  readonly lookups: readonly { readonly table: string; readonly reader: string }[];
+  /**
+   * The VRL programs the pipeline's `remap`s read from files, and whether
+   * each was handed over. One that was not leaves its component's lookups
+   * unknown, not empty.
+   */
+  readonly programs: readonly TopologyProgram[];
+  /** The components with a lookup whose table only the compiler can name. */
+  readonly opaqueLookups: readonly string[];
+  /** Where each drawn component goes, and the lanes long arrows take. */
   readonly layout: {
     readonly components: readonly TopologyPlacement[];
     readonly routes: readonly {
@@ -129,6 +145,41 @@ export interface Topology {
       readonly via: readonly { readonly column: number; readonly row: number }[];
     }[];
   };
+}
+
+/** One enrichment table. See `vector_topology::tables`. */
+export interface TopologyTable {
+  readonly id: string;
+  readonly type: string;
+  /** Which of `Topology.files` declares it, and where. */
+  readonly file: number;
+  readonly range: VrlRange;
+  /** Where its data is, as the config writes it: a path on Vector's machine. */
+  readonly path: string | null;
+  /** Whether a `file` table's first CSV line is a header rather than a row. */
+  readonly csvHeaders: boolean;
+  /** The components whose VRL looks it up by a literal name. */
+  readonly readers: readonly string[];
+}
+
+/** A VRL program a `remap` reads from a file. */
+export interface TopologyProgram {
+  readonly component: string;
+  /** As written in the config. */
+  readonly path: string;
+  /** The config file naming it, an index into `Topology.files`. */
+  readonly file: number;
+  readonly read: boolean;
+}
+
+/** How to read a pipeline. Mirrors `vector_topology::Options`. */
+export interface PipelineOptions {
+  /** Narrow the graph to the paths through this component. */
+  readonly focus?: string;
+  /** Draw the tables the components on screen read. */
+  readonly showTables?: boolean;
+  /** The VRL programs the config names by path, read by the caller. */
+  readonly programs?: readonly { readonly path: string; readonly source: string }[];
 }
 
 export interface TopologyPlacement {
@@ -212,6 +263,7 @@ interface WasmModule {
   stdlib(): string;
   topology(source: string, fileName: string): string;
   topology_files(filesJson: string, title: string, focus?: string): string;
+  pipeline(filesJson: string, title: string, optionsJson: string): string;
   enrichment_tables(source: string, fileName: string): string[] | undefined;
   vrl_version(): string;
   vector_release(): string;
@@ -345,6 +397,21 @@ export class VrlChecker {
   ): Topology {
     return JSON.parse(
       this.call((wasm) => wasm.topology_files(JSON.stringify(files), title, focus)),
+    ) as Topology;
+  }
+
+  /**
+   * `topologyFiles`, read the way `options` says. The wasm module opens no
+   * files, so the programs a `remap` keeps in files are handed over here;
+   * `Topology.programs` says which ones it wanted.
+   */
+  pipeline(
+    files: readonly { name: string; source: string; standalone: boolean }[],
+    title: string,
+    options: PipelineOptions = {},
+  ): Topology {
+    return JSON.parse(
+      this.call((wasm) => wasm.pipeline(JSON.stringify(files), title, JSON.stringify(options))),
     ) as Topology;
   }
 

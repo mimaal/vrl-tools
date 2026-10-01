@@ -28,17 +28,33 @@ export interface Topology {
   readonly document: string;
   readonly components: readonly {
     readonly id: string;
-    readonly role: 'source' | 'transform' | 'sink';
+    readonly role: 'source' | 'transform' | 'sink' | 'table';
     readonly type: string;
     readonly namedOutputs: readonly string[];
   }[];
+  readonly tables: readonly {
+    readonly id: string;
+    readonly type: string;
+    readonly file: number;
+    readonly path: string | null;
+    readonly csvHeaders: boolean;
+    readonly readers: readonly string[];
+  }[];
+  readonly lookups: readonly { readonly table: string; readonly reader: string }[];
+  readonly programs: readonly {
+    readonly component: string;
+    readonly path: string;
+    readonly file: number;
+    readonly read: boolean;
+  }[];
+  readonly opaqueLookups: readonly string[];
   readonly edges: readonly {
     readonly from: string;
     readonly output: string | null;
     readonly to: string;
   }[];
   readonly findings: readonly {
-    readonly severity: 'error' | 'warning';
+    readonly severity: 'error' | 'warning' | 'info';
     readonly message: string;
     readonly range: { readonly start: { readonly line: number } };
   }[];
@@ -111,6 +127,7 @@ interface WasmModule {
   topology(source: string, fileName: string): string;
   enrichment_tables(source: string, fileName: string): string[] | undefined;
   topology_files(filesJson: string, title: string): string;
+  pipeline(filesJson: string, title: string, optionsJson: string): string;
   stdlib(): string;
   vrl_version(): string;
 }
@@ -182,6 +199,27 @@ export function topologyFiles(
     readonly files: readonly string[];
     readonly unreadable: readonly unknown[];
   };
+}
+
+/** A pipeline read from several files. */
+export type PipelineTopology = Topology & {
+  readonly files: readonly string[];
+  readonly unreadable: readonly unknown[];
+  readonly focus: string | null;
+};
+
+/**
+ * `topologyFiles`, read the way `options` says: `vector_topology::Options`,
+ * which is what the extension passes.
+ */
+export function pipeline(
+  files: readonly { name: string; source: string; standalone?: boolean }[],
+  title: string,
+  options: Record<string, unknown> = {},
+): PipelineTopology {
+  return JSON.parse(
+    load().pipeline(JSON.stringify(files), title, JSON.stringify(options)),
+  ) as PipelineTopology;
 }
 
 /** Reads a Vector configuration and resolves its topology. */

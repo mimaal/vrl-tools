@@ -1,10 +1,19 @@
 import * as vscode from 'vscode';
 
 import { originOf } from './checker';
-import type { Topology, TopologyComponent, TopologyFinding, VrlChecker } from './checker';
+import type {
+  Topology,
+  TopologyComponent,
+  TopologyFinding,
+  TopologyTable,
+  VrlChecker,
+} from './checker';
 import { mainPipeline } from './grouping';
 import { affectsPipeline, allPipelines, CONFIG_GLOB, sameFile } from './pipeline';
 import type { Pipeline, PipelineChoice } from './pipeline';
+import { readPipeline, rowsOf } from './reading';
+import type { Counted } from './reading';
+import { describeTable } from './tablefiles';
 import { componentNames, REVEAL_COMMAND } from './topology';
 
 /**
@@ -33,18 +42,25 @@ const DEBOUNCE_MS = 400;
 /** The file extensions a Vector config has. */
 const CONFIG_FILE = /\.(ya?ml|toml|json)$/i;
 
-/** The roles, in the order events travel through them. */
+/** The roles events travel through, in the order they do. */
 const ROLES = [
   { role: 'source', title: 'Sources', icon: 'symbol-event', colour: 'charts.green' },
   { role: 'transform', title: 'Transforms', icon: 'wand', colour: 'charts.blue' },
   { role: 'sink', title: 'Sinks', icon: 'export', colour: 'charts.purple' },
-  { role: 'table', title: 'Enrichment tables', icon: 'table', colour: 'charts.orange' },
 ] as const;
+
+/** How a table is drawn. It is not one of the roles above: nothing flows through most. */
+const TABLE = { icon: 'table', colour: 'charts.orange' } as const;
 
 type Node =
   | { readonly kind: 'selector' }
   | { readonly kind: 'group'; readonly role: (typeof ROLES)[number] }
   | { readonly kind: 'problems' }
+  /** Every enrichment table of the pipeline, in one row. */
+  | { readonly kind: 'tables' }
+  /** The tables one file declares. */
+  | { readonly kind: 'tableFile'; readonly file: number }
+  | { readonly kind: 'table'; readonly table: TopologyTable }
   | { readonly kind: 'component'; readonly component: TopologyComponent }
   | { readonly kind: 'output'; readonly component: TopologyComponent; readonly output: string }
   | { readonly kind: 'finding'; readonly finding: TopologyFinding };
@@ -146,6 +162,13 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
    */
   private at = { index: 0, count: 0 };
 
+  /**
+   * The rows of the tables whose file has been opened in the tree, by table.
+   * Counted when a file's tables are unfolded and not before: 372 tables are
+   * 372 files to look for, and the group opens folded.
+   */
+  private rows = new Map<string, Counted>();
+
   constructor(
     private readonly checker: VrlChecker,
     private readonly output: vscode.OutputChannel,
@@ -226,6 +249,25 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
           .map((component) => ({ kind: 'component', component }));
       case 'problems':
         return analysis.findings.map((finding) => ({ kind: 'finding', finding }));
+      case 'tables': {
+        // By the file that declares them: that is how they are maintained,
+        // and three rows of files open faster than 372 of tables. The source
+        // half of a `memory` table is a component like any other, so it is
+        // listed as one.
+        const halves = analysis.components
+          .filter((component) => component.role === 'table' && hasOutputs(component))
+          .map((component): Node => ({ kind: 'component', component }));
+        const files = [...new Set(analysis.tables.map((table) => table.file))];
+        const tables: Node[] =
+          analysis.files.length > 1
+            ? files.map((file): Node => ({ kind: 'tableFile', file }))
+            : await this.tablesOf(analysis.tables);
+        return [...tables, ...halves];
+      }
+      case 'tableFile':
+        return this.tablesOf(analysis.tables.filter((table) => table.file === node.file));
+      case 'table':
+        return [];
       // A router's outputs hang off it, each going to the file that added it
       // — for a router written across files, not the one that declares it.
       // Then the component's own problems, so a row with a badge can be
@@ -252,6 +294,12 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
         return this.group(node.role);
       case 'problems':
         return this.problems();
+      case 'tables':
+        return this.tables();
+      case 'tableFile':
+        return this.tableFile(node.file);
+      case 'table':
+        return this.table(node.table);
       case 'component':
         return this.component(node.component);
       case 'output':
@@ -291,6 +339,9 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
         read.analysis.components.some((component) => component.role === role.role),
       ).map((role): Node => ({ kind: 'group', role })),
     );
+    if (read.analysis.components.some((component) => component.role === 'table')) {
+      nodes.push({ kind: 'tables' });
+    }
 
     if (read.analysis.findings.length > 0) {
       nodes.push({ kind: 'problems' });
@@ -312,14 +363,8 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
       if (!pipeline) {
         return undefined;
       }
-      const analysis = this.checker.topologyFiles(
-        pipeline.files.map((file) => ({
-          name: file.name,
-          source: file.source,
-          standalone: file.standalone,
-        })),
-        pipeline.title,
-      );
+      const analysis = await readPipeline(this.checker, pipeline);
+      this.rows = new Map();
       return { pipeline, analysis, findingsOf: attachFindings(analysis) };
     } catch (error) {
       this.output.appendLine(`Reading the pipeline for the sidebar failed: ${String(error)}`);
@@ -354,6 +399,149 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
     return item;
   }
 
+  /**
+   * The table rows for `tables`, the ones this pipeline reads first, with
+   * their CSVs counted where they can be found.
+   */
+  private async tablesOf(tables: readonly TopologyTable[]): Promise<Node[]> {
+    const pipeline = this.read?.pipeline;
+    if (pipeline) {
+      const counted = await Promise.all(tables.map((table) => rowsOf(pipeline, table)));
+      tables.forEach((table, index) => {
+        const rows = counted[index];
+        if (rows) {
+          this.rows.set(table.id, rows);
+        }
+      });
+    }
+    const read = (table: TopologyTable): number => (table.readers.length > 0 ? 0 : 1);
+    return [...tables]
+      .sort((a, b) => read(a) - read(b))
+      .map((table): Node => ({ kind: 'table', table }));
+  }
+
+  /**
+   * One row for every table there is. Folded: a pipeline has few components
+   * and can have hundreds of tables, and none of them is on the way anywhere.
+   */
+  private tables(): vscode.TreeItem {
+    const analysis = this.read?.analysis;
+    const tables = analysis?.tables ?? [];
+    const read = tables.filter((table) => table.readers.length > 0).length;
+
+    const item = new vscode.TreeItem(
+      `Enrichment tables (${tables.length})`,
+      vscode.TreeItemCollapsibleState.Collapsed,
+    );
+    item.description = `${read} read here`;
+    item.iconPath = new vscode.ThemeIcon(TABLE.icon, new vscode.ThemeColor(TABLE.colour));
+    item.tooltip = new vscode.MarkdownString(
+      [
+        `${read} of ${tables.length} are looked up by this pipeline's VRL, by a literal name in \`find_enrichment_table_records\` or \`get_enrichment_table_record\`.`,
+        'A table nothing here reads is not a problem: table files are shared across pipelines, and Vector says nothing about one.',
+        ...this.unknowns(),
+      ].join('\n\n'),
+    );
+    item.contextValue = 'vrl-tools.tables';
+    return item;
+  }
+
+  /**
+   * What keeps "unused in this pipeline" from being certain, said rather
+   * than hidden: a lookup through a variable, a program that is not here.
+   */
+  private unknowns(): string[] {
+    const analysis = this.read?.analysis;
+    if (!analysis) {
+      return [];
+    }
+    const missing = analysis.programs.filter((program) => !program.read);
+    return [
+      ...(analysis.opaqueLookups.length > 0
+        ? [
+            `${analysis.opaqueLookups.map((id) => `\`${id}\``).join(', ')} name a table through a variable, which only the compiler can follow, so a table shown as unused may be read after all.`,
+          ]
+        : []),
+      ...missing.map(
+        (program) =>
+          `\`${program.path}\`, the program of \`${program.component}\`, is not in this workspace, so what it looks up is unknown.`,
+      ),
+    ];
+  }
+
+  private tableFile(file: number): vscode.TreeItem {
+    const analysis = this.read?.analysis;
+    const tables = (analysis?.tables ?? []).filter((table) => table.file === file);
+    const read = tables.filter((table) => table.readers.length > 0).length;
+    const name = analysis?.files[file] ?? '';
+
+    const item = new vscode.TreeItem(
+      name.split('/').pop() ?? name,
+      vscode.TreeItemCollapsibleState.Collapsed,
+    );
+    item.description = `${tables.length} · ${read} read here`;
+    item.iconPath = vscode.ThemeIcon.File;
+    item.resourceUri = this.read?.pipeline.files[file]?.uri;
+    item.tooltip = name;
+    item.contextValue = 'vrl-tools.tableFile';
+    return item;
+  }
+
+  private table(table: TopologyTable): vscode.TreeItem {
+    const tables = this.read?.analysis.tables ?? [];
+    const files = this.read?.analysis.files ?? [];
+    // 372 rows each saying `file` say nothing; the type is worth a word only
+    // when it tells two tables apart.
+    const showType = !tables.every((other) => other.type === 'file');
+    const counted = this.rows.get(table.id);
+    const unused = table.readers.length === 0;
+
+    const item = new vscode.TreeItem(table.id, vscode.TreeItemCollapsibleState.None);
+    item.description = describeTable(table, showType, counted?.rows);
+    // Dimmed, not flagged: unused here is information, never a warning.
+    item.iconPath = new vscode.ThemeIcon(
+      TABLE.icon,
+      new vscode.ThemeColor(unused ? 'disabledForeground' : TABLE.colour),
+    );
+    item.tooltip = new vscode.MarkdownString(
+      [
+        `**${table.id}** — enrichment table, \`${table.type || 'no type'}\``,
+        unused
+          ? 'Unused in this pipeline: no VRL here looks it up by name.'
+          : `Read by ${table.readers.map((reader) => `\`${reader}\``).join(', ')}.`,
+        ...(table.path ? [`Data: \`${table.path}\`, as the config writes it.`] : []),
+        ...(counted
+          ? [`${counted.rows} row${counted.rows === 1 ? '' : 's'}, counted in \`${counted.counted}\`.`]
+          : table.type === 'file' && table.path
+            ? ['Not found in this workspace, so its rows are not counted.']
+            : []),
+        ...(files.length > 1 ? [files[table.file] ?? ''] : []),
+        ...(unused ? this.unknowns() : []),
+      ].join('\n\n'),
+    );
+
+    const file = this.read?.pipeline.files[table.file];
+    if (file) {
+      item.command = {
+        command: 'vscode.open',
+        title: 'Go to the table',
+        arguments: [
+          file.uri,
+          {
+            selection: new vscode.Range(
+              table.range.start.line,
+              table.range.start.character,
+              table.range.end.line,
+              table.range.end.character,
+            ),
+          },
+        ],
+      };
+    }
+    item.contextValue = 'vrl-tools.table';
+    return item;
+  }
+
   private problems(): vscode.TreeItem {
     const findings = this.read?.analysis.findings ?? [];
     const count = (severity: TopologyFinding['severity']) =>
@@ -383,7 +571,7 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
 
   private component(component: TopologyComponent): vscode.TreeItem {
     const own = this.findingsOf(component);
-    const role = ROLES.find((entry) => entry.role === component.role);
+    const role = ROLES.find((entry) => entry.role === component.role) ?? TABLE;
     const files = this.read?.analysis.files ?? [];
 
     const item = new vscode.TreeItem(
@@ -402,13 +590,13 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
     item.description = `${component.type || 'no type'}${outputs}`;
 
     item.iconPath = new vscode.ThemeIcon(
-      role?.icon ?? 'circle-outline',
+      role.icon,
       new vscode.ThemeColor(
         own.some((finding) => finding.severity === 'error')
           ? 'list.errorForeground'
           : own.some((finding) => finding.severity === 'warning')
             ? 'list.warningForeground'
-            : (role?.colour ?? 'foreground'),
+            : role.colour,
       ),
     );
 
@@ -510,6 +698,11 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
     clearTimeout(this.pending);
     this.emitter.dispose();
   }
+}
+
+/** Whether anything can read `component`: the source half of a `memory` table can. */
+function hasOutputs(component: TopologyComponent): boolean {
+  return component.defaultOutput || component.namedOutputs.length > 0;
 }
 
 /** Whether `outer` contains `inner`, by line and character. */

@@ -1,0 +1,3 @@
+[transforms.route_by_product]
+type = "exclusive_route"
+inputs = ["input-http"]

@@ -1,0 +1,621 @@
+# Network ranges. Generated: 124 tables over one CSV.
+
+[enrichment_tables.geo_001]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_002]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_003]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_004]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_005]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_006]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_007]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_008]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_009]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_010]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_011]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_012]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_013]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_014]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_015]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_016]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_017]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_018]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_019]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_020]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_021]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_022]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_023]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_024]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_025]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_026]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_027]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_028]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_029]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_030]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_031]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_032]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_033]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_034]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_035]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_036]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_037]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_038]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_039]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_040]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_041]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_042]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_043]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_044]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_045]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_046]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_047]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_048]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_049]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_050]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_051]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_052]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_053]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_054]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_055]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_056]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_057]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_058]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_059]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_060]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_061]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_062]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_063]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_064]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_065]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_066]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_067]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_068]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_069]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_070]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_071]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_072]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_073]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_074]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_075]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_076]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_077]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_078]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_079]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_080]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_081]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_082]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_083]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_084]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_085]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_086]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_087]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_088]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_089]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_090]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_091]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_092]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_093]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_094]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_095]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_096]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_097]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_098]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_099]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_100]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_101]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_102]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_103]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_104]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_105]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_106]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_107]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_108]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_109]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_110]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_111]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_112]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_113]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_114]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_115]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_116]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_117]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_118]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_119]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_120]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_121]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_122]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_123]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"
+
+[enrichment_tables.geo_124]
+type = "file"
+file.path = "tables/geo.csv"
+file.encoding.type = "csv"

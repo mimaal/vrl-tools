@@ -257,6 +257,20 @@ svg#canvas.panning {
   stroke-dasharray: 5 4;
 }
 
+/*
+ * A program reading a table. Dotted, because nothing travels along it: the
+ * arrows are where events go, and this is where a lookup looks.
+ */
+.edge.lookup path {
+  stroke: var(--table);
+  stroke-dasharray: 1.5 5;
+  stroke-linecap: round;
+}
+
+button[aria-pressed='true'] {
+  border-color: var(--edge-active);
+}
+
 /* A route's label opens the file that added the route. */
 .edge-label { cursor: pointer; }
 .edge-label rect {

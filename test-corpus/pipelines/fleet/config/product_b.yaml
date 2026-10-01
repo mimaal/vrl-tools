@@ -1,0 +1,18 @@
+transforms:
+  route_by_product:
+    routes:
+      - name: product_b
+        condition: '.product == "b"'
+
+  normalize-router:
+    routes:
+      - name: product_b
+        condition: '.source == "b"'
+
+  product-b-normalizer:
+    type: remap
+    inputs: [route_by_product.product_b]
+    reroute_dropped: true
+    source: |
+      .source = "b"
+      .threats = find_enrichment_table_records!("threat_001", { "indicator": .ip })

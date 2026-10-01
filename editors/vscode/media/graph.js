@@ -59,6 +59,7 @@
   const focusPill = /** @type {HTMLElement} */ (document.getElementById('focus-pill'));
   const focusName = /** @type {HTMLElement} */ (document.getElementById('focus-name'));
   const details = /** @type {HTMLElement} */ (document.getElementById('details'));
+  const tablesButton = /** @type {HTMLButtonElement} */ (document.getElementById('tables'));
 
   /** @typedef {{edge: any, group: SVGGElement, label?: SVGGElement}} Drawn */
   /** @typedef {{x: number, y: number, component: any}} Placed */
@@ -74,6 +75,7 @@
    *   components: any[], edges: any[], findings: any[],
    *   at: Map<string, Placed>, groups: Map<string, SVGGElement>, drawn: Drawn[],
    *   findingsOf: Map<string, any[]>, focus: string | null,
+   *   tables: Map<string, any>,
    * }}
    */
   let current = {
@@ -85,7 +87,10 @@
     drawn: [],
     findingsOf: new Map(),
     focus: null,
+    tables: new Map(),
   };
+  /** Whether the tables the components on screen read are drawn too. */
+  let showTables = false;
   /** The component clicked, whose paths stay lit until something else is. */
   /** @type {string | null} */
   let selected = null;
@@ -225,7 +230,19 @@
     const layout = /** @type {{components: any[], routes: any[]}} */ (analysis.layout);
     files = analysis.files ?? [];
 
-    renderSummary(components, edges);
+    /** @type {Map<string, any>} */
+    const tables = new Map((analysis.tables ?? []).map((/** @type {any} */ table) => [table.id, table]));
+    // A lookup is drawn like an edge and is not one: no event travels along
+    // it, so it is kept out of `edges`, which is what the paths are walked on.
+    const lookups = (analysis.lookups ?? []).map((/** @type {any} */ lookup) => ({
+      from: lookup.table,
+      to: lookup.reader,
+      output: null,
+      lookup: true,
+    }));
+
+    renderSummary(components, edges, [...tables.values()]);
+    renderTablesButton([...tables.values()], lookups.length);
     renderProblems(findings);
     renderFocus(analysis.focus ?? null);
     empty.classList.toggle('visible', components.length === 0);
@@ -252,10 +269,26 @@
       }
     }
 
-    const drawn = drawEdges(edges, at, lanes);
+    const drawn = drawEdges([...edges, ...lookups], at, lanes);
     const groups = drawNodes(at, findingsOf);
 
-    current = { components, edges, findings, at, groups, drawn, findingsOf, focus: analysis.focus ?? null };
+    // The legend names only the roles on screen: most pipelines draw no table.
+    const tableKey = document.querySelector('.legend .table');
+    if (tableKey instanceof HTMLElement) {
+      tableKey.hidden = ![...at.values()].some((placed) => placed.component.role === 'table');
+    }
+
+    current = {
+      components,
+      edges,
+      findings,
+      at,
+      groups,
+      drawn,
+      findingsOf,
+      focus: analysis.focus ?? null,
+      tables,
+    };
 
     // What the person was doing survives a redraw while they edit: the
     // selection if the component still exists, the search as typed.
@@ -410,7 +443,11 @@
       const backwards = x2 <= x1;
 
       let d;
-      if (backwards) {
+      if (edge.lookup && backwards) {
+        // A table that could not be put before its reader. Not a loop, so not
+        // drawn as one: a plain curve from one to the other.
+        d = `M ${x1} ${y1}${curve(x1, y1, x2, y2)}`;
+      } else if (backwards) {
         // Only a loop draws right to left, and a loop is an error: it goes
         // round underneath, dashed, rather than through the boxes.
         const below = Math.max(from.y, to.y) + NODE_H + 40;
@@ -430,12 +467,16 @@
         d += curve(cx, cy, x2, y2);
       }
 
+      const looped = backwards && !edge.lookup;
       const group = /** @type {SVGGElement} */ (
-        el('g', { class: backwards ? 'edge backwards' : 'edge' }, edgeLayer)
+        el('g', { class: edge.lookup ? 'edge lookup' : looped ? 'edge backwards' : 'edge' }, edgeLayer)
       );
       const path = /** @type {SVGPathElement} */ (
-        el('path', { d, 'marker-end': backwards ? 'url(#arrow-error)' : 'url(#arrow)' }, group)
+        el('path', { d, 'marker-end': looped ? 'url(#arrow-error)' : 'url(#arrow)' }, group)
       );
+      if (edge.lookup) {
+        el('title', {}, group).textContent = `${edge.to} looks up ${edge.from}`;
+      }
 
       /** @type {SVGGElement | undefined} */
       let label;
@@ -675,14 +716,26 @@
     }
 
     const { upstream, downstream } = reach(id);
+    const flows = (/** @type {string} */ other) => upstream.has(other) || downstream.has(other);
+    // A table is on no path, so it is lit for its readers: the tables of
+    // everything on the path, and the readers of the table pointed at.
+    const lit = (/** @type {any} */ edge) => edge.from === id || flows(edge.to);
+    const near = new Set();
+    for (const { edge } of current.drawn) {
+      if (edge.lookup && lit(edge)) {
+        near.add(edge.from);
+        near.add(edge.to);
+      }
+    }
     for (const [other, group] of current.groups) {
-      group.classList.toggle('on-path', upstream.has(other) || downstream.has(other));
+      group.classList.toggle('on-path', flows(other) || near.has(other));
       group.classList.toggle('selected', other === selected);
     }
     for (const { edge, group, label } of current.drawn) {
-      const onPath =
-        (upstream.has(edge.from) && upstream.has(edge.to)) ||
-        (downstream.has(edge.from) && downstream.has(edge.to));
+      const onPath = edge.lookup
+        ? lit(edge)
+        : (upstream.has(edge.from) && upstream.has(edge.to)) ||
+          (downstream.has(edge.from) && downstream.has(edge.to));
       group.classList.toggle('on-path', onPath);
       label?.classList.toggle('on-path', onPath);
       if (!group.classList.contains('backwards')) {
@@ -728,7 +781,14 @@
 
     const flow = document.createElement('span');
     flow.className = 'muted';
-    flow.textContent = `${count(upstream.size - 1, 'component', 'components')} upstream · ${downstream.size - 1} downstream`;
+    const table = component.role === 'table' ? current.tables.get(selected) : undefined;
+    // A table has readers, not a place in the flow.
+    flow.textContent = table
+      ? [
+          table.readers.length > 0 ? `read by: ${table.readers.join(', ')}` : 'unused in this pipeline',
+          ...(table.path ? [table.path] : []),
+        ].join(' · ')
+      : `${count(upstream.size - 1, 'component', 'components')} upstream · ${downstream.size - 1} downstream`;
 
     details.append(role, name, type, place, flow);
 
@@ -832,24 +892,40 @@
 
   // ------------------------------------------------------------ summary, list
 
-  /** @param {any[]} components @param {any[]} edges */
-  function renderSummary(components, edges) {
+  /** @param {any[]} components @param {any[]} edges @param {any[]} tables */
+  function renderSummary(components, edges, tables) {
     const of = (/** @type {string} */ role) => components.filter((c) => c.role === role).length;
+    const read = tables.filter((table) => table.readers.length > 0).length;
     summary.textContent = [
       count(of('source'), 'source', 'sources'),
       count(of('transform'), 'transform', 'transforms'),
       count(of('sink'), 'sink', 'sinks'),
       // Named only when there are any: most pipelines have none, and a
-      // permanent "0 enrichment tables" is a word of noise on every one.
-      ...(of('table') > 0 ? [count(of('table'), 'enrichment table', 'enrichment tables')] : []),
+      // permanent "0 enrichment tables" is a word of noise on every one. How
+      // many this pipeline reads is said with them, since they are not drawn.
+      ...(tables.length > 0
+        ? [`${count(tables.length, 'enrichment table', 'enrichment tables')} (${read} read here)`]
+        : []),
       count(edges.length, 'connection', 'connections'),
     ].join(' · ');
+  }
 
-    // The legend names only the roles on screen, for the same reason.
-    const tableKey = document.querySelector('.legend .table');
-    if (tableKey instanceof HTMLElement) {
-      tableKey.hidden = of('table') === 0;
-    }
+  /**
+   * The switch that draws the tables the components on screen read. Only
+   * there when the pipeline has tables, and it says so when none is read
+   * rather than appearing to do nothing.
+   *
+   * @param {any[]} tables @param {number} lookups how many lookups are drawn
+   */
+  function renderTablesButton(tables, lookups) {
+    tablesButton.hidden = tables.length === 0;
+    tablesButton.textContent = showTables ? 'Hide tables' : 'Show tables';
+    tablesButton.setAttribute('aria-pressed', String(showTables));
+    tablesButton.title = !showTables
+      ? 'Draw the enrichment tables the components on screen read, each joined to its readers'
+      : lookups === 0
+        ? 'No component on screen looks a table up by a literal name, so there is none to draw'
+        : 'Back to the components events pass through';
   }
 
   /** Errors first, then warnings, then what the editor cannot know. */
@@ -1000,6 +1076,9 @@
     vscode.postMessage({ type: 'export' });
   });
   document.getElementById('unfocus')?.addEventListener('click', () => focusOn(null));
+  tablesButton.addEventListener('click', () => {
+    vscode.postMessage({ type: 'tables', show: !showTables });
+  });
 
   // The keyboard, for everything the pointer does. Keys typed into the search
   // box are the search box's.
@@ -1145,6 +1224,7 @@
       } else {
         banner.classList.remove('visible');
       }
+      showTables = Boolean(message.showTables);
       render(message.analysis);
       // Edits keep the view where the person left it; a different config, or
       // narrowing to one component's paths, starts framed.

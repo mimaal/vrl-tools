@@ -13,8 +13,10 @@
 pub mod config;
 pub mod graph;
 pub mod layout;
+pub mod lookups;
 pub mod outputs;
 pub mod render;
+pub mod tables;
 mod vars;
 
 pub use config::{
@@ -22,8 +24,9 @@ pub use config::{
     ConfigError, Document, Input, Role,
 };
 pub use graph::{build, focus, Edge, Finding, Graph, Severity};
-pub use layout::{layout, Layout, Placement, Route, Slot};
+pub use layout::{arrange, layout, Layout, Placement, Route, Slot};
 pub use render::{diagram, document, document_of_files};
+pub use tables::{Lookup, Table};
 
 /// Which parser to read a config with.
 ///
@@ -99,6 +102,54 @@ pub struct Analysis {
     pub unreadable: Vec<Unreadable>,
     /// The component the graph is narrowed to, when it is. See [`focus`].
     pub focus: Option<String>,
+    /// Every enrichment table of the pipeline and who reads it — the whole
+    /// pipeline's, whatever the graph is narrowed to. See [`tables`].
+    pub tables: Vec<Table>,
+    /// The lookups drawn: a table in the layout, joined to a component that
+    /// reads it. Empty unless [`Options::show_tables`].
+    pub lookups: Vec<Lookup>,
+    /// The VRL programs the pipeline's `remap`s read from files, and whether
+    /// each was handed over to be read. One that was not leaves its
+    /// component's lookups unknown rather than empty.
+    pub programs: Vec<ProgramRef>,
+    /// The components with a lookup whose table only the compiler can name.
+    /// While there are any, "nothing reads this table" is not certain.
+    pub opaque_lookups: Vec<String>,
+}
+
+/// How to read a pipeline, beyond which files it is.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Options {
+    /// Narrow the graph to the paths through this component. See [`focus`].
+    pub focus: Option<String>,
+    /// Draw the enrichment tables the components on screen read, each joined
+    /// to its readers. See [`tables`].
+    pub show_tables: bool,
+    /// The VRL programs the config names by path (`remap`'s `file` and
+    /// `files`), read by the caller: this crate opens no files.
+    pub programs: Vec<Program>,
+}
+
+/// A VRL program kept in a file of its own.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct Program {
+    /// The path exactly as the config writes it, which is how it is matched.
+    pub path: String,
+    pub source: String,
+}
+
+/// A program a component reads from a file.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgramRef {
+    pub component: String,
+    /// As written in the config.
+    pub path: String,
+    /// The config file that names it, for resolving a relative path.
+    pub file: usize,
+    /// Whether [`Options::programs`] had it.
+    pub read: bool,
 }
 
 /// One file of a pipeline, as given to [`analyse_files`].
@@ -136,11 +187,15 @@ pub struct Unreadable {
 /// useless exactly when it is wanted.
 pub fn analyse(source: &str, format: Format, title: &str) -> Result<Analysis, ConfigError> {
     let graph = build(format.read(source)?);
-    let layout = layout(&graph);
+    let drawing = tables::drawing(&graph, false);
 
     Ok(Analysis {
         document: document(&graph, title),
-        layout,
+        layout: arrange(&graph, &drawing),
+        tables: tables::tables(&graph),
+        lookups: Vec::new(),
+        programs: programs_of(&graph.components, &[]),
+        opaque_lookups: opaque(&graph.components),
         components: graph.components,
         edges: graph.edges,
         findings: graph.findings,
@@ -148,6 +203,29 @@ pub fn analyse(source: &str, format: Format, title: &str) -> Result<Analysis, Co
         unreadable: Vec::new(),
         focus: None,
     })
+}
+
+/// Every program the components read from a file, and whether it was given.
+fn programs_of(components: &[Component], given: &[Program]) -> Vec<ProgramRef> {
+    components
+        .iter()
+        .flat_map(|component| {
+            component.programs.iter().map(move |path| ProgramRef {
+                component: component.id.clone(),
+                path: path.clone(),
+                file: component.file,
+                read: given.iter().any(|program| program.path == *path),
+            })
+        })
+        .collect()
+}
+
+fn opaque(components: &[Component]) -> Vec<String> {
+    components
+        .iter()
+        .filter(|component| component.opaque_lookups)
+        .map(|component| component.id.clone())
+        .collect()
 }
 
 /// Reads a pipeline split across several files, the way Vector reads the
@@ -171,6 +249,20 @@ pub fn analyse_files(files: &[ConfigFile], title: &str) -> Analysis {
 /// where they were in the whole pipeline.
 #[must_use]
 pub fn analyse_files_focused(files: &[ConfigFile], title: &str, focus: Option<&str>) -> Analysis {
+    analyse_pipeline(
+        files,
+        title,
+        &Options {
+            focus: focus.map(ToOwned::to_owned),
+            ..Options::default()
+        },
+    )
+}
+
+/// [`analyse_files`], read the way `options` says.
+#[must_use]
+pub fn analyse_pipeline(files: &[ConfigFile], title: &str, options: &Options) -> Analysis {
+    let focus = options.focus.as_deref();
     let mut entries = Vec::new();
     let mut relaxed_wildcards = false;
     let mut unreadable = Vec::new();
@@ -206,21 +298,68 @@ pub fn analyse_files_focused(files: &[ConfigFile], title: &str, focus: Option<&s
     }
 
     let names: Vec<String> = files.iter().map(|file| file.name.clone()).collect();
-    let (components, findings) = config::assemble(entries, &names);
+    let (mut components, findings) = config::assemble(entries, &names);
+
+    // What a program kept in a file looks up belongs to the component that
+    // runs it, exactly as if it were written inline.
+    for component in &mut components {
+        for path in &component.programs {
+            if let Some(program) = options.programs.iter().find(|program| program.path == *path) {
+                let mut found = lookups::Found {
+                    tables: std::mem::take(&mut component.lookups),
+                    opaque: component.opaque_lookups,
+                };
+                found.merge(lookups::scan(&program.source));
+                component.lookups = found.tables;
+                component.opaque_lookups = found.opaque;
+            }
+        }
+    }
+
     let whole = build(Document {
         components,
         relaxed_wildcards,
         findings,
     });
+    // About the whole pipeline, whatever is drawn of it: narrowing the graph
+    // to one component does not make the other readers of a table go away.
+    let all_tables = tables::tables(&whole);
+    let programs = programs_of(&whole.components, &options.programs);
+    let opaque_lookups = opaque(&whole.components);
+
     let (graph, focus) = match focus.and_then(|id| graph::focus(&whole, id).map(|g| (g, id))) {
-        Some((narrowed, id)) => (narrowed, Some(id.to_owned())),
+        Some((mut narrowed, id)) => {
+            // A table has no edges, so narrowing drops every one. The ones
+            // the components left read come back, to be drawn if asked for.
+            let read: Vec<&String> = narrowed.components.iter().flat_map(|c| &c.lookups).collect();
+            let back: Vec<Component> = whole
+                .components
+                .iter()
+                .filter(|component| component.is_lookup_table() && read.contains(&&component.id))
+                .cloned()
+                .collect();
+            narrowed.components.extend(back);
+            (narrowed, Some(id.to_owned()))
+        }
         None => (whole, None),
     };
-    let layout = layout(&graph);
+    let drawing = tables::drawing(&graph, options.show_tables);
+    let layout = arrange(&graph, &drawing);
 
     Analysis {
-        document: document_of_files(&graph, title, &names),
+        document: render::document_drawn(&graph, &drawing, title, &names),
         layout,
+        tables: all_tables,
+        lookups: drawing
+            .lookups
+            .iter()
+            .map(|&(table, reader)| Lookup {
+                table: graph.components[table].id.clone(),
+                reader: graph.components[reader].id.clone(),
+            })
+            .collect(),
+        programs,
+        opaque_lookups,
         components: graph.components,
         edges: graph.edges,
         findings: graph.findings,
@@ -245,6 +384,27 @@ pub fn analyse_files_json(files_json: &str, title: &str, focus: Option<&str>) ->
             .unwrap_or_else(|error| error_json(&error.to_string(), None)),
         Err(error) => error_json(&format!("not a list of config files: {error}"), None),
     }
+}
+
+/// [`analyse_pipeline`], taking and giving JSON: the files as an array of
+/// `{name, source, standalone}`, the options as [`Options`] in camelCase. An
+/// empty `options_json` is the defaults.
+#[must_use]
+pub fn analyse_pipeline_json(files_json: &str, title: &str, options_json: &str) -> String {
+    let files = match serde_json::from_str::<Vec<ConfigFile>>(files_json) {
+        Ok(files) => files,
+        Err(error) => return error_json(&format!("not a list of config files: {error}"), None),
+    };
+    let options = if options_json.trim().is_empty() {
+        Options::default()
+    } else {
+        match serde_json::from_str::<Options>(options_json) {
+            Ok(options) => options,
+            Err(error) => return error_json(&format!("not the graph's options: {error}"), None),
+        }
+    };
+    serde_json::to_string(&analyse_pipeline(&files, title, &options))
+        .unwrap_or_else(|error| error_json(&error.to_string(), None))
 }
 
 /// [`analyse`], as JSON, for crossing a language boundary.
@@ -795,6 +955,120 @@ sinks:
         let unknown = super::analyse_files_focused(&files, "config", Some("gone"));
         assert_eq!(unknown.components.len(), 5, "a name that went away shows everything");
         assert_eq!(unknown.focus, None);
+    }
+
+    const LOOKUPS: &str = "[sources.in]\ntype = \"stdin\"\n\
+        [transforms.inline]\ntype = \"remap\"\ninputs = [\"in\"]\n\
+        source = '.a = get_enrichment_table_record!(\"hosts\", {})'\n\
+        [transforms.filed]\ntype = \"remap\"\ninputs = [\"in\"]\nfile = \"programs/filed.vrl\"\n\
+        [sinks.out]\ntype = \"console\"\ninputs = [\"inline\", \"filed\"]\n\
+        [enrichment_tables.hosts]\ntype = \"file\"\nfile.path = \"hosts.csv\"\n\
+        [enrichment_tables.geo]\ntype = \"file\"\nfile.path = \"geo.csv\"\n\
+        [enrichment_tables.spare]\ntype = \"file\"\nfile.path = \"spare.csv\"\n";
+
+    fn options(json: &str) -> super::Options {
+        serde_json::from_str(json).expect("the options parse")
+    }
+
+    /// The tables stay in the list — the grouping, the summary and the
+    /// sidebar count them — and leave the drawing.
+    #[test]
+    fn tables_are_listed_and_not_placed() {
+        let analysis = analyse_files(&[file("config/a.toml", LOOKUPS)], "config");
+
+        assert_eq!(analysis.components.len(), 7);
+        let placed: Vec<&str> = analysis
+            .layout
+            .components
+            .iter()
+            .map(|p| analysis.components[p.component].id.as_str())
+            .collect();
+        assert_eq!(placed, ["in", "inline", "filed", "out"]);
+        assert!(analysis.findings.is_empty(), "an unread table is not a finding");
+    }
+
+    /// `file =` is where a long program lives. Until somebody hands the file
+    /// over, what it reads is unknown, and the analysis says which file.
+    #[test]
+    fn a_program_in_a_file_is_asked_for_and_then_read() {
+        let files = [file("config/a.toml", LOOKUPS)];
+        let before = analyse_files(&files, "config");
+        let readers = |analysis: &super::Analysis, id: &str| {
+            analysis.tables.iter().find(|t| t.id == id).expect(id).readers.clone()
+        };
+
+        assert_eq!(before.programs.len(), 1);
+        assert_eq!(before.programs[0].component, "filed");
+        assert_eq!(before.programs[0].path, "programs/filed.vrl");
+        assert!(!before.programs[0].read);
+        assert_eq!(readers(&before, "hosts"), ["inline"]);
+        assert!(readers(&before, "geo").is_empty());
+
+        let after = super::analyse_pipeline(
+            &files,
+            "config",
+            &options(
+                r#"{"programs":[{"path":"programs/filed.vrl","source":".g = find_enrichment_table_records!(table: \"geo\", condition: {})\n.h = get_enrichment_table_record!(\"hosts\", {})"}]}"#,
+            ),
+        );
+        assert!(after.programs[0].read);
+        assert_eq!(readers(&after, "hosts"), ["inline", "filed"]);
+        assert_eq!(readers(&after, "geo"), ["filed"]);
+        assert!(readers(&after, "spare").is_empty());
+    }
+
+    /// Asked for, only the tables somebody on screen reads are drawn.
+    #[test]
+    fn showing_tables_draws_the_ones_read_by_what_is_on_screen() {
+        let files = [file("config/a.toml", LOOKUPS)];
+        let placed = |analysis: &super::Analysis| -> Vec<String> {
+            analysis
+                .layout
+                .components
+                .iter()
+                .map(|p| analysis.components[p.component].id.clone())
+                .collect()
+        };
+
+        let shown = super::analyse_pipeline(&files, "config", &options(r#"{"showTables":true}"#));
+        assert_eq!(placed(&shown), ["in", "inline", "filed", "out", "hosts"]);
+        assert_eq!(shown.lookups.len(), 1);
+        assert_eq!((shown.lookups[0].table.as_str(), shown.lookups[0].reader.as_str()), ("hosts", "inline"));
+
+        // Narrowed to the remap that reads nothing, no table is on screen —
+        // and the list of tables is still the whole pipeline's.
+        let narrowed = super::analyse_pipeline(
+            &files,
+            "config",
+            &options(r#"{"showTables":true,"focus":"filed"}"#),
+        );
+        assert_eq!(placed(&narrowed), ["in", "filed", "out"]);
+        assert_eq!(narrowed.tables.len(), 3);
+
+        let on_reader = super::analyse_pipeline(
+            &files,
+            "config",
+            &options(r#"{"showTables":true,"focus":"inline"}"#),
+        );
+        assert_eq!(placed(&on_reader), ["in", "inline", "out", "hosts"]);
+    }
+
+    /// A table named through a variable validates in Vector, so its reader
+    /// is named rather than the table called unused.
+    #[test]
+    fn a_lookup_the_editor_cannot_follow_is_said() {
+        let analysis = analyse_files(
+            &[file(
+                "vector.toml",
+                "[sources.in]\ntype = \"stdin\"\n[transforms.r]\ntype = \"remap\"\ninputs = [\"in\"]\n\
+                 source = \"\"\"\nname = \\\"t\\\"\n.x = get_enrichment_table_record!(name, {})\n\"\"\"\n\
+                 [sinks.out]\ntype = \"console\"\ninputs = [\"r\"]\n[enrichment_tables.t]\ntype = \"file\"\n",
+            )],
+            "config",
+        );
+
+        assert_eq!(analysis.opaque_lookups, ["r"]);
+        assert!(analysis.tables[0].readers.is_empty());
     }
 
     #[test]

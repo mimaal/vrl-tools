@@ -4,6 +4,46 @@ Versions before 0.5.0 were never published; they exist as tags and as `.vsix`
 files built locally. They are listed here because the history explains what the
 extension is.
 
+## Unreleased
+
+0.7.2 read the pipeline that exposed it correctly — 16 files given with
+`--config-dir`, 26 components events pass through, 54 edges, three warnings,
+all three intended — and drew it unreadably: the same config declares 372
+`file` enrichment tables in three files, and every one was a box. What follows
+was measured on `test-corpus/pipelines/fleet/`, a config directory of that
+shape (two routers merged across files, an overlay named to sort first, 372
+tables, a monitoring graph beside the main one), which `vector validate
+--config-dir` 0.58.0 loads with exactly the three warnings the graph gives.
+Each claim about Vector was checked against that binary and against Vector's
+source at the pin.
+
+- **Enrichment tables are listed, not drawn.** On the fixture the graph placed
+  384 nodes, 372 of them tables joined to nothing; it now places 12, and the
+  webview draws it in 24 ms instead of 198 (median of 15 redraws in headless
+  Chrome; the analysis itself stays at ~27 ms). A table nothing flows through
+  — every kind but a `memory` table with `inputs` or a `source_config` — is
+  left out of the picture and collapsed into one "Enrichment tables (372)" row
+  in the sidebar, grouped by the file that declares it. Each table says who
+  reads it: "read by: X, Y" or "unused in this pipeline", from the literal
+  table names in `find_enrichment_table_records` and
+  `get_enrichment_table_record` calls, in a `remap`'s `source`, in the program
+  its `file` or `files` names, and in any condition. **Show tables**, in the
+  graph, draws only the tables the components on screen read, each joined to
+  its readers by a dotted line; narrowed to one component, that is its tables.
+  Unused is said, never warned about: Vector warns about the outputs of
+  sources and transforms and a table has none, and table files are shared
+  across pipelines. Where it cannot be certain the sidebar says why — Vector
+  accepts a table named through a variable (`name = "hosts"`, then
+  `get_enrichment_table_record!(name, …)` validates), which only the compiler
+  can follow, and a program file may not be in the workspace.
+- **A table shows its data, not its type.** When every table is a `file`
+  table, 372 rows each saying `file` say nothing; the row gives the CSV path
+  as written and, when the file is found in the workspace, its row count —
+  records as Vector's CSV reader counts them, header excluded unless
+  `include_headers` is off. Paths are written for Vector's working directory,
+  so the file is looked for from the config's directory upwards, and the
+  tooltip names the file that was counted.
+
 ## 0.7.2 — 2026-09-28
 
 After 0.7.1 the pipeline that exposed it drew right: 16 files, 26 components,

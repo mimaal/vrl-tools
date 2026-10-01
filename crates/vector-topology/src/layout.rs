@@ -26,6 +26,7 @@ use std::collections::HashMap;
 
 use crate::config::Role;
 use crate::graph::Graph;
+use crate::tables::Drawing;
 
 /// How many times rows are re-ordered, each time in both directions. Beyond a
 /// handful the order stops moving for any pipeline a person writes by hand.
@@ -35,7 +36,7 @@ const PASSES: usize = 4;
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Layout {
-    /// One per component, in the order of [`Graph::components`].
+    /// One per component drawn, in the order of [`Graph::components`].
     pub components: Vec<Placement>,
     /// The lanes of every arrow that skips columns. An arrow between
     /// neighbouring columns, or one closing a loop, has none.
@@ -77,16 +78,37 @@ pub struct Slot {
 /// Arranges every component of `graph`.
 #[must_use]
 pub fn layout(graph: &Graph) -> Layout {
-    let count = graph.components.len();
+    arrange(graph, &Drawing::everything(graph))
+}
+
+/// Arranges the components of `graph` that `drawing` draws; the rest get no
+/// placement at all.
+///
+/// A table drawn for its lookups goes in the column just before the first
+/// component that reads it, so the line between them is short. Lookups do not
+/// move anything else: the columns are the flow's, worked out before the
+/// tables are placed, so asking for the tables adds boxes without rearranging
+/// the pipeline around them.
+#[must_use]
+pub fn arrange(graph: &Graph, drawing: &Drawing) -> Layout {
+    // The drawn components, numbered among themselves; everything below works
+    // on those numbers and `shown` turns them back.
+    let shown: Vec<usize> = (0..graph.components.len())
+        .filter(|&position| drawing.drawn.get(position).copied().unwrap_or(false))
+        .collect();
+    let count = shown.len();
     if count == 0 {
         return Layout::default();
     }
+    let mut local: Vec<Option<usize>> = vec![None; graph.components.len()];
+    for (position, &component) in shown.iter().enumerate() {
+        local[component] = Some(position);
+    }
 
-    let index: HashMap<&str, usize> = graph
-        .components
+    let index: HashMap<&str, usize> = shown
         .iter()
         .enumerate()
-        .map(|(position, component)| (component.id.as_str(), position))
+        .map(|(position, &component)| (graph.components[component].id.as_str(), position))
         .collect();
 
     // One link per pair, whatever the number of outputs joining them: two
@@ -100,8 +122,48 @@ pub fn layout(graph: &Graph) -> Layout {
     links.sort_unstable();
     links.dedup();
 
-    let forward = without_back_edges(count, &links);
-    let mut columns = columns(graph, &forward);
+    let roles: Vec<Role> = shown
+        .iter()
+        .map(|&component| graph.components[component].role)
+        .collect();
+    let mut forward = without_back_edges(count, &links);
+    let mut columns = columns(&roles, &forward);
+
+    // The lookups, placed against the columns the flow already has.
+    let at = |component: usize| local.get(component).copied().flatten();
+    let mut lookups: Vec<(usize, usize)> = drawing
+        .lookups
+        .iter()
+        .filter_map(|&(table, reader)| Some((at(table)?, at(reader)?)))
+        .filter(|(table, reader)| table != reader)
+        .collect();
+    lookups.sort_unstable();
+    lookups.dedup();
+    for &(table, _) in &lookups {
+        // Only a table no arrow touches is moved; a `memory` table events
+        // flow into is where the flow put it.
+        if links.iter().any(|&(from, to)| from == table || to == table) {
+            continue;
+        }
+        let nearest = lookups
+            .iter()
+            .filter(|&&(other, _)| other == table)
+            .map(|&(_, reader)| columns[reader])
+            .min()
+            .unwrap_or(0);
+        columns[table] = nearest.saturating_sub(1);
+    }
+    // A lookup is laid out like any link once it points right; one that does
+    // not (its reader is in the first column, or behind the table) is drawn
+    // by whoever draws, without a lane.
+    forward.extend(
+        lookups
+            .iter()
+            .copied()
+            .filter(|&(table, reader)| columns[table] < columns[reader]),
+    );
+    forward.sort_unstable();
+    forward.dedup();
 
     // Lanes are nodes as far as ordering goes, numbered after the components.
     // Each long link becomes a chain through them.
@@ -127,17 +189,17 @@ pub fn layout(graph: &Graph) -> Layout {
 
     Layout {
         components: (0..count)
-            .map(|component| Placement {
-                component,
-                column: columns[component],
-                row: rows[component],
+            .map(|position| Placement {
+                component: shown[position],
+                column: columns[position],
+                row: rows[position],
             })
             .collect(),
         routes: chains
             .into_iter()
             .map(|(from, to, lanes)| Route {
-                from,
-                to,
+                from: shown[from],
+                to: shown[to],
                 via: lanes
                     .into_iter()
                     .map(|lane| Slot {
@@ -198,8 +260,8 @@ fn without_back_edges(count: usize, links: &[(usize, usize)]) -> Vec<(usize, usi
 
 /// Each component's column: one past the furthest thing feeding it, with
 /// sinks gathered in the last column.
-fn columns(graph: &Graph, forward: &[(usize, usize)]) -> Vec<usize> {
-    let count = graph.components.len();
+fn columns(roles: &[Role], forward: &[(usize, usize)]) -> Vec<usize> {
+    let count = roles.len();
     let mut column = vec![0; count];
 
     // Longest path on a DAG by relaxation. `count` rounds are enough for any
@@ -218,11 +280,11 @@ fn columns(graph: &Graph, forward: &[(usize, usize)]) -> Vec<usize> {
     }
 
     let last = column.iter().copied().max().unwrap_or(0);
-    for (position, component) in graph.components.iter().enumerate() {
+    for (position, &role) in roles.iter().enumerate() {
         // A sink nothing feeds stays where it is: pushing it right would draw
         // an unconnected box at the far end, which says nothing true.
         let fed = forward.iter().any(|&(_, to)| to == position);
-        if component.role == Role::Sink && fed {
+        if role == Role::Sink && fed {
             column[position] = last.max(1);
         }
     }
@@ -300,8 +362,14 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{layout, Placement};
+    use super::{arrange, layout, Placement};
+    use crate::tables::drawing;
     use crate::{build, read_yaml};
+
+    const TABLES: &str = "sources:\n  in:\n    type: stdin\n\
+        transforms:\n  parse:\n    type: remap\n    inputs: [in]\n    source: '.h = get_enrichment_table_record!(\"hosts\", {})'\n\
+        sinks:\n  out:\n    type: console\n    inputs: [parse]\n\
+        enrichment_tables:\n  hosts:\n    type: file\n  unread:\n    type: file\n";
 
     fn placed(source: &str) -> Vec<(String, usize, usize)> {
         let graph = build(read_yaml(source).expect("parses"));
@@ -400,6 +468,44 @@ mod tests {
         let a = arranged.components[1];
         assert_eq!(route.via[0].column, a.column);
         assert_ne!(route.via[0].row, a.row, "the lane and `a` share a place");
+    }
+
+    /// The tables are what a real pipeline has most of, and none of them is
+    /// on the way anywhere: left out, the picture is the pipeline again.
+    #[test]
+    fn a_table_that_is_not_drawn_gets_no_place() {
+        let graph = build(read_yaml(TABLES).expect("parses"));
+        let arranged = arrange(&graph, &drawing(&graph, false));
+
+        let placed: Vec<&str> = arranged
+            .components
+            .iter()
+            .map(|p| graph.components[p.component].id.as_str())
+            .collect();
+        assert_eq!(placed, ["in", "parse", "out"]);
+    }
+
+    /// Asked for, a table sits in the column before its reader and moves
+    /// nothing else.
+    #[test]
+    fn a_table_drawn_for_its_lookup_sits_before_its_reader() {
+        let graph = build(read_yaml(TABLES).expect("parses"));
+        let without = arrange(&graph, &drawing(&graph, false));
+        let with = arrange(&graph, &drawing(&graph, true));
+        let column = |layout: &super::Layout, id: &str| {
+            layout
+                .components
+                .iter()
+                .find(|p| graph.components[p.component].id == id)
+                .map(|p| p.column)
+        };
+
+        assert_eq!(column(&with, "hosts"), Some(0));
+        assert_eq!(column(&with, "parse"), Some(1));
+        assert_eq!(column(&with, "unread"), None, "nothing here reads it");
+        for id in ["in", "parse", "out"] {
+            assert_eq!(column(&with, id), column(&without, id), "{id} moved");
+        }
     }
 
     #[test]

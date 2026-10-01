@@ -1,0 +1,21 @@
+# Named to sort first: its routes are tried before every product's.
+
+[[transforms.route_by_product.routes]]
+name = "firewall-demo"
+condition = '.product == "firewall" && .demo == true'
+
+[[transforms.normalize-router.routes]]
+name = "firewall-demo"
+condition = '.source == "firewall-demo"'
+
+[transforms.firewall-demo-normalizer]
+type = "remap"
+inputs = ["route_by_product.firewall-demo"]
+reroute_dropped = true
+source = '''
+.source = "firewall-demo"
+asset, err = get_enrichment_table_record("assets_001", { "host": .host })
+if err == null {
+  .asset = asset
+}
+'''

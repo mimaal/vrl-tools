@@ -124,6 +124,16 @@ pub fn topology_files(files_json: &str, title: &str, focus: Option<String>) -> S
     vector_topology::analyse_files_json(files_json, title, focus.as_deref())
 }
 
+/// [`topology_files`], read the way `options_json` says: which component to
+/// narrow to, whether to draw the enrichment tables, and the VRL programs the
+/// config names by path, which only the caller can open. The shape is
+/// `vector_topology::Options`; an empty string is the defaults.
+#[wasm_bindgen]
+#[must_use]
+pub fn pipeline(files_json: &str, title: &str, options_json: &str) -> String {
+    vector_topology::analyse_pipeline_json(files_json, title, options_json)
+}
+
 /// The enrichment table names a Vector config declares, which is what
 /// [`check`] and [`run`] take.
 ///

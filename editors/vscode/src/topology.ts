@@ -6,6 +6,7 @@ import type { Shape } from './grouping';
 import { affectsPipeline, anyConfig, CONFIG_GLOB, pipelineOf, sameFile } from './pipeline';
 import type { ComponentNames, PipelineChoice } from './pipeline';
 import type { Pipeline, PipelineFile } from './pipeline';
+import { readPipeline } from './reading';
 
 /**
  * `VRL: Show pipeline graph` — where events go in a Vector config.
@@ -256,17 +257,19 @@ async function reveal(uri: vscode.Uri, range: VrlRange): Promise<void> {
 async function analyse(
   checker: VrlChecker,
   document: vscode.TextDocument,
-  focus?: string,
+  options: { focus?: string; showTables?: boolean } = {},
 ): Promise<{ pipeline: Pipeline; analysis: Topology }> {
   const pipeline = await pipelineOf(document, componentNames(checker));
-  const files = pipeline.files.map((file) => ({
-    // The name picks the parser, so a file without a telling extension (an
-    // untitled one) is named for its language instead.
-    name: sameFile(file.uri, document.uri) ? relativeConfigName(file.name, document) : file.name,
-    source: file.source,
-    standalone: file.standalone,
-  }));
-  return { pipeline, analysis: checker.topologyFiles(files, pipeline.title, focus) };
+  const named: Pipeline = {
+    ...pipeline,
+    files: pipeline.files.map((file) => ({
+      ...file,
+      // The name picks the parser, so a file without a telling extension (an
+      // untitled one) is named for its language instead.
+      name: sameFile(file.uri, document.uri) ? relativeConfigName(file.name, document) : file.name,
+    })),
+  };
+  return { pipeline, analysis: await readPipeline(checker, named, options) };
 }
 
 /** A file's name as given, with its format appended when the name has none. */
@@ -300,6 +303,7 @@ type FromWebview =
   | { readonly type: 'ready' }
   | { readonly type: 'export' }
   | { readonly type: 'reveal'; readonly range: VrlRange; readonly file: number }
+  | { readonly type: 'tables'; readonly show: boolean }
   | { readonly type: 'focus'; readonly id: string | null };
 
 /**
@@ -321,6 +325,8 @@ class GraphPanel implements vscode.Disposable {
   private drawn = false;
   /** The component the graph is narrowed to, if the person asked for that. */
   private focus: string | undefined;
+  /** Whether the tables read by what is on screen are drawn. Off until asked. */
+  private showTables = false;
   private pending: NodeJS.Timeout | undefined;
   /** The draw in flight, so a burst of edits does not interleave reads. */
   private generation = 0;
@@ -465,6 +471,10 @@ class GraphPanel implements vscode.Disposable {
         this.focus = message.id ?? undefined;
         void this.post(true);
         break;
+      case 'tables':
+        this.showTables = message.show;
+        void this.post(true);
+        break;
     }
   }
 
@@ -482,7 +492,10 @@ class GraphPanel implements vscode.Disposable {
 
     let result: { pipeline: Pipeline; analysis: Topology };
     try {
-      result = await analyse(this.checker, document, this.focus);
+      result = await analyse(this.checker, document, {
+        focus: this.focus,
+        showTables: this.showTables,
+      });
     } catch (error) {
       this.output.appendLine(`Graphing ${document.uri.fsPath} failed: ${String(error)}`);
       return;
@@ -519,6 +532,7 @@ class GraphPanel implements vscode.Disposable {
       title: pipeline.title,
       analysis,
       refit,
+      showTables: this.showTables,
       warning: unreadable || undefined,
     });
   }
@@ -558,6 +572,7 @@ function html(webview: vscode.Webview, media: vscode.Uri): string {
     <span id="focus-pill" role="status">Paths through <strong id="focus-name"></strong><button id="unfocus" title="Show the whole pipeline (Esc)">Show all</button></span>
     <span class="spacer"></span>
     <span class="search"><input id="search" type="search" placeholder="Find a component (Ctrl+F)" aria-label="Find a component by name, type or file" spellcheck="false"><span id="match-count" aria-live="polite"></span></span>
+    <button id="tables" aria-pressed="false" hidden>Show tables</button>
     <button id="fit" title="Fit the whole pipeline in view (0)">Fit</button>
     <button id="export" title="Open as Markdown with a Mermaid diagram, to save next to the config">Export Markdown</button>
   </header>

@@ -1,0 +1,10 @@
+# Vector watching itself: nothing here touches the events above, so it is a
+# second graph in the same config.
+
+[sources.vector-metrics]
+type = "internal_metrics"
+
+[sinks.metrics-out]
+type = "prometheus_exporter"
+inputs = ["vector-metrics"]
+address = "0.0.0.0:9598"

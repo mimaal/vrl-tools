@@ -281,3 +281,67 @@ fn the_merge_is_still_vectors() {
         "Vector's serde_json no longer keeps insertion order",
     );
 }
+
+/// What `src/lookups.rs` and `src/tables.rs` take for granted about how a
+/// table is read: the two functions, the table as their first parameter and a
+/// compile-time constant, the three places a `remap` keeps its program, where
+/// a table's data file is written, and that Vector warns about the outputs of
+/// sources and transforms and nothing else — so an unread table is no warning.
+#[test]
+fn the_lookups_are_still_how_a_table_is_read() {
+    let Some(root) = vector_source() else {
+        return;
+    };
+    let read = |file: &str| {
+        std::fs::read_to_string(root.join(file)).unwrap_or_else(|error| panic!("{file}: {error}"))
+    };
+
+    for function in vector_topology::lookups::FUNCTIONS {
+        let source = read(&format!("lib/vector-vrl/enrichment/src/{function}.rs"));
+        assert!(source.contains(&format!("\"{function}\"")), "{function} was renamed");
+        assert!(
+            source.contains(".required_enum(\"table\", &tables, state)"),
+            "{function} no longer takes its table as a constant among the declared ones",
+        );
+        let parameters = source
+            .split("const PARAMETERS: &[Parameter] = &[")
+            .nth(1)
+            .expect("the parameters are still declared");
+        assert!(
+            parameters.trim_start().starts_with("Parameter::required(\n        \"table\","),
+            "`table` is no longer the first parameter of {function}",
+        );
+    }
+
+    let remap = read("src/transforms/remap.rs");
+    for field in [
+        "pub source: Option<String>",
+        "pub file: Option<PathBuf>",
+        "pub files: Option<Vec<PathBuf>>",
+    ] {
+        assert!(remap.contains(field), "a remap no longer has `{field}`");
+    }
+
+    for (file, field) in [
+        ("src/enrichment_tables/file.rs", "pub path: PathBuf"),
+        ("src/enrichment_tables/geoip.rs", "pub path: PathBuf"),
+        ("src/enrichment_tables/mmdb.rs", "pub path: PathBuf"),
+    ] {
+        assert!(read(file).contains(field), "{file} no longer has `{field}`");
+    }
+    assert!(
+        read("src/enrichment_tables/file.rs").contains("pub file: FileSettings"),
+        "a file table's path is no longer under `file`",
+    );
+
+    assert!(
+        read("src/config/validation.rs")
+            .contains("for (input_type, id) in transform_ids.chain(source_ids)"),
+        "validation::warnings walks something other than source and transform outputs; \
+         re-read it before saying an unread table is not a warning",
+    );
+    assert!(
+        read("src/conditions/mod.rs").contains("vrl_config.build(enrichment_tables, metrics_storage)"),
+        "a string condition is no longer VRL compiled against the tables",
+    );
+}

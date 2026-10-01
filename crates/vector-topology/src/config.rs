@@ -25,6 +25,7 @@ use editor_text::{LineIndex, Range};
 use saphyr::{LoadableYamlNode, MarkedYaml};
 
 use crate::graph::{Finding, Severity};
+use crate::lookups::{self, Found};
 use crate::outputs::{self, Fields};
 use crate::vars::{self, Interpolated, Syntax};
 
@@ -119,6 +120,24 @@ pub struct Component {
     /// Every entry the component was merged from, in merge order: just the
     /// declaration, unless files of a `--config-dir` add to it.
     pub pieces: Vec<Origin>,
+    /// The enrichment tables its VRL looks up by a literal name: a `remap`'s
+    /// `source`, a condition. What a program kept in a file looks up is added
+    /// once somebody hands the file over. See [`crate::lookups`].
+    pub lookups: Vec<String>,
+    /// Whether some lookup names its table in a way only the compiler can
+    /// follow, so the list above may be short.
+    pub opaque_lookups: bool,
+    /// The VRL programs a `remap` reads from files, as written: its `file`
+    /// and its `files`. Relative to the directory Vector is started in, which
+    /// the config does not say.
+    pub programs: Vec<String>,
+    /// For an enrichment table read from a file, the path of its data: a
+    /// `file` table's `file.path`, a `geoip` or `mmdb` table's `path`.
+    pub path: Option<String>,
+    /// Whether the first line of a `file` table's CSV is its header rather
+    /// than a row: `file.encoding.include_headers`, which defaults to `true`.
+    /// Needed by whoever counts the rows; `true` for everything else.
+    pub csv_headers: bool,
 }
 
 /// A place in one of the files being read.
@@ -141,6 +160,14 @@ impl Component {
     #[must_use]
     pub fn has_outputs(&self) -> bool {
         self.default_output || !self.named_outputs.is_empty()
+    }
+
+    /// Whether this is a table VRL consults and nothing else: no `inputs`
+    /// writing into it and no source half reading out of it, so not a single
+    /// arrow touches it. Every table but a `memory` one is this.
+    #[must_use]
+    pub fn is_lookup_table(&self) -> bool {
+        self.role == Role::Table && self.inputs.is_empty() && !self.has_outputs()
     }
 
     /// Every output an input can name, as Vector writes it: the bare ID for
@@ -918,11 +945,33 @@ fn push(components: &mut Vec<Component>, entry: Entry) {
                 default_output: source.default,
                 file: entry.file,
                 pieces: vec![anchor],
+                lookups: Vec::new(),
+                opaque_lookups: false,
+                programs: Vec::new(),
+                path: None,
+                csv_headers: true,
             });
         }
     }
 
     let output_origins = origins(entry.role, &component_type, &outputs.named, anchor, &parts);
+    // A table is what is looked up, never what looks: its fields are paths
+    // and schemas, not programs.
+    let found = if entry.role == Role::Table {
+        Found::default()
+    } else {
+        vrl_in(&entry.body)
+    };
+    let programs = programs(entry.role, &component_type, &entry.body);
+    let path = table_path(entry.role, &component_type, &entry.body);
+    let csv_headers = !matches!(
+        entry
+            .body
+            .get("file")
+            .and_then(|file| file.get("encoding"))
+            .and_then(|encoding| encoding.get("include_headers")),
+        Some(Value::Bool(false)),
+    );
     components.push(Component {
         id: entry.id,
         role: entry.role,
@@ -934,7 +983,66 @@ fn push(components: &mut Vec<Component>, entry: Entry) {
         default_output: outputs.default,
         file: entry.file,
         pieces: parts.iter().map(|part| part.origin).collect(),
+        lookups: found.tables,
+        opaque_lookups: found.opaque,
+        programs,
+        path,
+        csv_headers,
     });
+}
+
+/// The lookups in every string of a component. See [`crate::lookups`] for why
+/// every string rather than the fields known to hold VRL.
+fn vrl_in(value: &Value) -> Found {
+    let mut found = Found::default();
+    let mut pending = vec![value];
+    while let Some(value) = pending.pop() {
+        match value {
+            Value::Text(text) => found.merge(lookups::scan(text)),
+            Value::List(items) => pending.extend(items.iter().rev()),
+            Value::Map(entries) => pending.extend(entries.iter().rev().map(|(_, value)| value)),
+            _ => {}
+        }
+    }
+    found
+}
+
+/// The files a `remap` reads its program from: `file`, then `files`
+/// (`RemapConfig`, `src/transforms/remap.rs`).
+fn programs(role: Role, component_type: &str, body: &Value) -> Vec<String> {
+    if role != Role::Transform || component_type != "remap" {
+        return Vec::new();
+    }
+    let mut paths = Vec::new();
+    if let Some(Value::Text(path)) = body.get("file") {
+        paths.push(path.clone());
+    }
+    if let Some(Value::List(items)) = body.get("files") {
+        paths.extend(items.iter().filter_map(|item| match item {
+            Value::Text(path) => Some(path.clone()),
+            _ => None,
+        }));
+    }
+    paths
+}
+
+/// Where an enrichment table's data is: `file.path` for a `file` table
+/// (`FileSettings`, `src/enrichment_tables/file.rs`), `path` for a `geoip` or
+/// an `mmdb` one (`src/enrichment_tables/geoip.rs`, `mmdb.rs`). A `memory`
+/// table has none: it is filled by the pipeline.
+fn table_path(role: Role, component_type: &str, body: &Value) -> Option<String> {
+    if role != Role::Table {
+        return None;
+    }
+    let found = match component_type {
+        "file" => body.get("file")?.get("path")?,
+        "geoip" | "mmdb" => body.get("path")?,
+        _ => return None,
+    };
+    match found {
+        Value::Text(path) => Some(path.clone()),
+        _ => None,
+    }
 }
 
 /// Which part added each named output.

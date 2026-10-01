@@ -1,0 +1,4 @@
+host,owner,site
+fw-01,netops,madrid
+fw-02,netops,valencia
+db-01,"data, platform",madrid

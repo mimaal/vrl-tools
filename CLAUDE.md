@@ -263,7 +263,7 @@ Free and open source. Full phased plan lives in @docs/PLAN.md.
 ## Verification
 
 - `cargo test` across the workspace before closing out a phase.
-- `npm test` runs seven suites; `test:snippets` compiles every expansion and
+- `npm test` runs eight suites; `test:snippets` compiles every expansion and
   `test:diagnostics` compiles the corpus, including every block the injection
   grammars paint as VRL inside a Vector config. Anything this repo shows as
   valid VRL has to be accepted by the pinned compiler. `test:analysis` covers
@@ -274,7 +274,9 @@ Free and open source. Full phased plan lives in @docs/PLAN.md.
   no amount of compiling VRL says whether two folders are one pipeline.
   `test:pipelines` walks `test-corpus/pipelines/` from the disk through the
   guess, the grouping and the wasm reading, which is the path none of the
-  others is handed a folder to test.
+  others is handed a folder to test. `test:tables` covers
+  `editors/vscode/src/tablefiles.ts`, the guess at where a path written for
+  Vector's machine is in the workspace, and the CSV row count.
 - **Test the path that finds the input, not only the path that takes it.**
   Every topology test passed its files explicitly, so the code that decides
   *which* files are a pipeline had no test at all — and read an entire

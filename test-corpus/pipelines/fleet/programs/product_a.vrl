@@ -1,0 +1,4 @@
+.source = "a"
+# Two tables, one of them named as a keyword argument.
+.geo = get_enrichment_table_record!("geo_001", { "network": .network })
+.sites = find_enrichment_table_records!(table: "geo_002", condition: { "network": .network })

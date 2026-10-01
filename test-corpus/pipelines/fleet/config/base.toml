@@ -1,0 +1,33 @@
+# What every product shares: where events come in, where they end up, and the
+# two transforms after the routers. The routers are in topology.toml and
+# normalize-router.toml; each product's file adds a route to both.
+
+[sources.input-http]
+type = "http_server"
+address = "0.0.0.0:8080"
+decoding.codec = "json"
+
+[transforms.time-diff]
+type = "remap"
+inputs = ["normalize-router.firewall-demo", "normalize-router.product_*"]
+source = '''
+.lag_seconds = to_unix_timestamp(now()) - to_unix_timestamp(parse_timestamp!(.timestamp, "%+"))
+'''
+
+# Where every normalizer's dropped events go to be counted. Nothing reads what
+# comes out: that is the end of the line, on purpose.
+[transforms.dropped-handler]
+type = "remap"
+inputs = ["*-normalizer.dropped"]
+source = '''
+.dropped = true
+'''
+
+[sinks.out]
+type = "console"
+inputs = ["time-diff"]
+encoding.codec = "json"
+
+[sinks.unmatched]
+type = "blackhole"
+inputs = ["normalize-router._unmatched"]

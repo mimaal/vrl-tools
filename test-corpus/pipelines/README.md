@@ -25,6 +25,21 @@ logs. The shape is taken from a real one:
 - `normalizer/deploy/` holds YAML that is not a Vector config: a compose file,
   and Helm values with a `sources:` that is nested, not top-level.
 - `examples/` is two standalone configs that both declare `app`.
+- `fleet/` is the same kind of pipeline at the size that made the graph
+  unreadable: two routers merged across files, `00-module-demo-firewall.toml`
+  sorting first, **372 `file` enrichment tables** in three files (two TOML
+  spellings and YAML), a monitoring graph in the same directory that shares
+  nothing with the main one, and three outputs nothing reads on purpose
+  (`route_by_product._unmatched`, `normalize-router.imposible`,
+  `dropped-handler`). Four of the tables are read: one from an inline
+  `source`, two from `programs/product_a.vrl` (named by `file =`, one of them
+  by keyword), one from YAML. `tables/` holds the three small CSVs the tables
+  point at, one with a quoted comma and one with a quoted line break.
+
+  The paths in it are relative to `fleet/`, which is where Vector has to be
+  started: `vector validate --config-dir config` there (0.58.0) loads it with
+  those three "has no consumers" warnings and nothing else. Add
+  `--no-environment` on a machine without `/var/lib/vector`.
 
 The pieces only work the way Vector's `--config-dir` loads them. Given with
 `--config`, each file is loaded on its own, and the product files fail — which

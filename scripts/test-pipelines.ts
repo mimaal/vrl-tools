@@ -15,7 +15,7 @@
  * Run with: npm run test:pipelines (after npm run build:wasm)
  */
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 
 import {
@@ -27,7 +27,9 @@ import {
   shapeOf,
 } from '../editors/vscode/src/grouping.js';
 import type { Shape } from '../editors/vscode/src/grouping.js';
-import { errorsIn, topology, topologyFiles } from './checker-harness.js';
+import { candidates, countRows } from '../editors/vscode/src/tablefiles.js';
+import { errorsIn, pipeline, topology, topologyFiles } from './checker-harness.js';
+import type { PipelineTopology } from './checker-harness.js';
 import { ROOT } from './grammar-harness.js';
 
 const CORPUS = path.join(ROOT, 'test-corpus', 'pipelines');
@@ -76,6 +78,16 @@ check(
   [
     'examples/one.yaml',
     'examples/two.yaml',
+    'fleet/config/00-module-demo-firewall.toml',
+    'fleet/config/base.toml',
+    'fleet/config/monitoring.toml',
+    'fleet/config/normalize-router.toml',
+    'fleet/config/product_a.toml',
+    'fleet/config/product_b.yaml',
+    'fleet/config/tables-assets.toml',
+    'fleet/config/tables-geo.toml',
+    'fleet/config/tables-threat.yaml',
+    'fleet/config/topology.toml',
     'normalizer/config/00-overlay.toml',
     'normalizer/config/base.toml',
     'normalizer/config/devices-available/product_a.toml',
@@ -105,6 +117,23 @@ check(
     ['examples/one.yaml', ['examples/one.yaml']],
     ['examples/two.yaml', ['examples/two.yaml']],
     [
+      // Two graphs that share nothing — the pipeline and Vector watching
+      // itself — and still one config: no name clashes, so nothing splits.
+      'fleet/config',
+      [
+        'fleet/config/00-module-demo-firewall.toml',
+        'fleet/config/base.toml',
+        'fleet/config/monitoring.toml',
+        'fleet/config/normalize-router.toml',
+        'fleet/config/product_a.toml',
+        'fleet/config/product_b.yaml',
+        'fleet/config/tables-assets.toml',
+        'fleet/config/tables-geo.toml',
+        'fleet/config/tables-threat.yaml',
+        'fleet/config/topology.toml',
+      ],
+    ],
+    [
       'normalizer/config',
       [
         'normalizer/config/00-overlay.toml',
@@ -119,9 +148,9 @@ check(
   ],
 );
 check(
-  'with nothing chosen, the one shown is the real pipeline, not the first',
+  'with nothing chosen, the one shown is the biggest real pipeline, not the first',
   groups[mainPipeline(groups, shapeOfFile)]?.title,
-  'normalizer/config',
+  'fleet/config',
 );
 
 // ---------------------------------------------------------------- the reading
@@ -132,7 +161,9 @@ const findingsOf = (title: string) => {
   return analysis;
 };
 
-for (const found of groups.filter((entry) => entry.title !== 'normalizer/config')) {
+for (const found of groups.filter(
+  (entry) => !['normalizer/config', 'fleet/config'].includes(entry.title),
+)) {
   const analysis = topologyFiles(found.files, found.title);
   check(
     `${found.title}: every file reads, and Vector would start on it`,
@@ -222,18 +253,163 @@ if (merged) {
   check('normalizer/config is found', false, true);
 }
 
+// ------------------------------------------------------------------ at scale
+
+/**
+ * `readPipeline` in reading.ts, with the disk in place of the workspace: read
+ * once to learn which programs the config keeps in files, find them the way
+ * the extension does, and read again with them.
+ */
+function readWhole(
+  files: readonly File[],
+  title: string,
+  options: Record<string, unknown> = {},
+): PipelineTopology {
+  const first = pipeline(files, title, options);
+  const programs = first.programs.flatMap((wanted) => {
+    const found = candidates(wanted.path, first.files[wanted.file] ?? '')
+      .map((candidate) => path.join(CORPUS, candidate))
+      .find((candidate) => existsSync(candidate));
+    return found ? [{ path: wanted.path, source: readFileSync(found, 'utf8') }] : [];
+  });
+  return programs.length > 0 ? pipeline(files, title, { ...options, programs }) : first;
+}
+
+/** The component each placement of the layout is of. */
+const placed = (analysis: PipelineTopology): string[] =>
+  analysis.layout.components.map((placement) => analysis.components[placement.component]?.id ?? '?');
+
+// fleet/ is the shape of the pipeline 0.8.0 was measured against: two routers
+// merged across files, an overlay named to sort first, 372 `file` tables in
+// three files, a monitoring graph beside the main one, and three outputs that
+// end on purpose. `vector validate --config-dir config` 0.58.0, run from
+// fleet/, loads it with exactly the three warnings below.
+const fleetFiles = groups.find((entry) => entry.title === 'fleet/config')?.files ?? [];
+const fleet = readWhole(fleetFiles, 'fleet/config');
+const UNREAD = [
+  'warning: nothing reads `route_by_product._unmatched`, so the events it produces go nowhere',
+  'warning: nothing reads `normalize-router.imposible`, so the events it produces go nowhere',
+  'warning: nothing reads `dropped-handler`, so the events it produces go nowhere',
+];
+check(
+  'fleet/config: every file reads, and the findings are the three warnings Vector gives',
+  {
+    unreadable: fleet.unreadable,
+    findings: fleet.findings.map((finding) => `${finding.severity}: ${finding.message}`).sort(),
+  },
+  { unreadable: [], findings: [...UNREAD].sort() },
+);
+check(
+  'fleet/config: 372 tables are listed, by the file that declares them',
+  Object.fromEntries(
+    [...new Set(fleet.tables.map((table) => table.file))].map((file) => [
+      fleet.files[file],
+      fleet.tables.filter((table) => table.file === file).length,
+    ]),
+  ),
+  {
+    'fleet/config/tables-assets.toml': 124,
+    'fleet/config/tables-geo.toml': 124,
+    'fleet/config/tables-threat.yaml': 124,
+  },
+);
+check(
+  'fleet/config: the initial graph draws the pipeline and none of its tables',
+  {
+    nodes: placed(fleet).length,
+    atMostThirty: placed(fleet).length <= 30,
+    tables: placed(fleet).filter((id) => fleet.tables.some((table) => table.id === id)),
+  },
+  { nodes: 12, atMostThirty: true, tables: [] },
+);
+check(
+  'fleet/config: the program a remap keeps in a file is found and read',
+  fleet.programs,
+  [{ component: 'product-a-normalizer', path: 'programs/product_a.vrl', file: 4, read: true }],
+);
+check(
+  'fleet/config: each table says who reads it — inline, from a file, by keyword — and the rest are unused',
+  Object.fromEntries(
+    fleet.tables.filter((table) => table.readers.length > 0).map((table) => [table.id, table.readers]),
+  ),
+  {
+    assets_001: ['firewall-demo-normalizer'],
+    geo_001: ['product-a-normalizer'],
+    geo_002: ['product-a-normalizer'],
+    threat_001: ['product-b-normalizer'],
+  },
+);
+check(
+  'fleet/config: every table gives its CSV, and the rows are counted where it is found',
+  [...new Set(fleet.tables.map((table) => `${table.type} ${table.path}`))].map((line) => {
+    const table = fleet.tables.find((entry) => `${entry.type} ${entry.path}` === line);
+    const found = candidates(table?.path ?? '', fleet.files[table?.file ?? 0] ?? '').find((candidate) =>
+      existsSync(path.join(CORPUS, candidate)),
+    );
+    return [
+      line,
+      found,
+      found && countRows(readFileSync(path.join(CORPUS, found), 'utf8'), table?.csvHeaders ?? true),
+    ];
+  }),
+  [
+    ['file tables/assets.csv', 'fleet/tables/assets.csv', 3],
+    ['file tables/geo.csv', 'fleet/tables/geo.csv', 2],
+    ['file tables/threat.csv', 'fleet/tables/threat.csv', 2],
+  ],
+);
+
+const withTables = readWhole(fleetFiles, 'fleet/config', { showTables: true });
+check(
+  'fleet/config: asked for, the tables drawn are the four that are read, each joined to its reader',
+  {
+    nodes: placed(withTables).length,
+    lookups: withTables.lookups.map((lookup) => `${lookup.table} -> ${lookup.reader}`).sort(),
+  },
+  {
+    nodes: 16,
+    lookups: [
+      'assets_001 -> firewall-demo-normalizer',
+      'geo_001 -> product-a-normalizer',
+      'geo_002 -> product-a-normalizer',
+      'threat_001 -> product-b-normalizer',
+    ],
+  },
+);
+const narrowed = readWhole(fleetFiles, 'fleet/config', { showTables: true, focus: 'product-b-normalizer' });
+check(
+  'fleet/config: narrowed to one remap, only its table is drawn, and the list is still whole',
+  {
+    tablesDrawn: placed(narrowed).filter((id) => narrowed.tables.some((table) => table.id === id)),
+    listed: narrowed.tables.length,
+  },
+  { tablesDrawn: ['threat_001'], listed: 372 },
+);
+
 // ------------------------------------------------------------ the VRL in them
 
-// What this corpus shows as VRL has to be VRL the pinned compiler accepts.
-const programs = guessed.flatMap((file) =>
-  [
-    ...file.source.matchAll(/^\s*source\s*=\s*'''\n([\s\S]*?)'''/gm),
-    ...file.source.matchAll(/^(\s*)source:\s*\|\n((?:\1\s+.*\n?)+)/gm),
-  ].map((match) => ({ file: file.name, program: match[match.length - 1] })),
-);
-check('every remap in the corpus is found to compile', programs.length, 6);
+// What this corpus shows as VRL has to be VRL the pinned compiler accepts,
+// against the tables its own pipeline declares.
+const tablesOf = (file: string): string[] =>
+  file.startsWith('fleet/') ? fleet.tables.map((table) => table.id) : [];
+const programs = [
+  ...guessed.flatMap((file) =>
+    [
+      ...file.source.matchAll(/^\s*source\s*=\s*'''\n([\s\S]*?)'''/gm),
+      ...file.source.matchAll(/^(\s*)source:\s*\|\n((?:\1\s+.*\n?)+)/gm),
+    ].map((match) => ({ file: file.name, program: match[match.length - 1] })),
+  ),
+  ...all
+    .filter((file) => file.name.endsWith('.vrl'))
+    .map((file) => ({ file: file.name, program: file.source })),
+];
+check('every remap in the corpus is found to compile', programs.length, 11);
 for (const { file, program } of programs) {
-  check(`${file}: \`${program.trim()}\` compiles`, errorsIn(program).map((e) => e.message), []);
+  check(
+    `${file}: \`${program.trim().split('\n')[0]}\` compiles`,
+    errorsIn(program, undefined, tablesOf(file)).map((e) => e.message),
+    [],
+  );
 }
 
 console.log(`\n${failed} failed`);

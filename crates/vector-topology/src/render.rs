@@ -14,6 +14,7 @@ use std::collections::HashMap;
 
 use crate::config::Role;
 use crate::graph::{Graph, Severity};
+use crate::tables::{self, Drawing};
 
 /// The whole document: the diagram, and what is wrong underneath it.
 #[must_use]
@@ -25,12 +26,22 @@ pub fn document(graph: &Graph, title: &str) -> String {
 /// says which file its line is in.
 #[must_use]
 pub fn document_of_files(graph: &Graph, title: &str, files: &[String]) -> String {
+    document_drawn(graph, &tables::drawing(graph, false), title, files)
+}
+
+/// [`document_of_files`], drawing what `drawing` says to draw.
+#[must_use]
+pub fn document_drawn(graph: &Graph, drawing: &Drawing, title: &str, files: &[String]) -> String {
     let mut out = String::new();
 
     out.push_str(&format!("# {title}\n\n"));
     out.push_str(&summary(graph));
     out.push_str("\n\n");
-    out.push_str(&diagram(graph));
+    if let Some(left_out) = tables_left_out(graph, drawing) {
+        out.push_str(&left_out);
+        out.push_str("\n\n");
+    }
+    out.push_str(&diagram_drawn(graph, drawing));
 
     if !graph.findings.is_empty() {
         out.push_str(&problems(graph, files));
@@ -71,12 +82,46 @@ fn summary(graph: &Graph) -> String {
     )
 }
 
-/// The Mermaid flowchart.
+/// What the diagram leaves out, said in words: the tables nothing flows
+/// through, and how many of the pipeline's tables its VRL reads.
+fn tables_left_out(graph: &Graph, drawing: &Drawing) -> Option<String> {
+    let hidden = graph
+        .components
+        .iter()
+        .zip(&drawing.drawn)
+        .filter(|(component, &drawn)| !drawn && component.is_lookup_table())
+        .count();
+    if hidden == 0 {
+        return None;
+    }
+
+    let read = tables::tables(graph)
+        .iter()
+        .filter(|table| !table.readers.is_empty())
+        .count();
+    Some(format!(
+        "{hidden} {} not drawn: nothing flows through {}, VRL looks {} up by name. \
+         {read} of the pipeline's tables {} read by a literal name in its VRL.",
+        plural(hidden, "enrichment table is", "enrichment tables are"),
+        plural(hidden, "it", "them"),
+        plural(hidden, "it", "them"),
+        plural(read, "is", "are"),
+    ))
+}
+
+/// The Mermaid flowchart of the components events pass through.
 #[must_use]
 pub fn diagram(graph: &Graph) -> String {
-    let mut out = String::from("```mermaid\nflowchart LR\n");
+    diagram_drawn(graph, &tables::drawing(graph, false))
+}
 
-    if graph.components.is_empty() {
+/// The Mermaid flowchart of what `drawing` draws.
+#[must_use]
+pub fn diagram_drawn(graph: &Graph, drawing: &Drawing) -> String {
+    let mut out = String::from("```mermaid\nflowchart LR\n");
+    let drawn = |position: usize| drawing.drawn.get(position).copied().unwrap_or(false);
+
+    if drawing.count() == 0 {
         // Mermaid rejects an empty graph outright, and an error where a
         // picture should be reads as a bug in the extension rather than as an
         // empty config.
@@ -85,6 +130,9 @@ pub fn diagram(graph: &Graph) -> String {
     }
 
     for (position, component) in graph.components.iter().enumerate() {
+        if !drawn(position) {
+            continue;
+        }
         let label = escape(&if component.component_type.is_empty() {
             component.id.clone()
         } else {
@@ -138,6 +186,12 @@ pub fn diagram(graph: &Graph) -> String {
             )),
             None => out.push_str(&format!("  {} --> {}\n", node_id(from), node_id(to))),
         }
+    }
+
+    // Dotted, and without an arrow's meaning: no event travels along a
+    // lookup, the program at the far end reads the table.
+    for &(table, reader) in &drawing.lookups {
+        out.push_str(&format!("  {} -.-> {}\n", node_id(table), node_id(reader)));
     }
 
     out.push_str("```\n");
@@ -275,6 +329,47 @@ sinks:
 
         assert!(text.contains("n0([\"app.logs-1<br/>file\"])"), "{text}");
         assert!(text.contains("n0 --> n1"), "{text}");
+    }
+
+    const WITH_TABLES: &str = "
+sources:
+  in:
+    type: stdin
+transforms:
+  parse:
+    type: remap
+    inputs: [in]
+    source: '.h = get_enrichment_table_record!(\"hosts\", {})'
+sinks:
+  out:
+    type: console
+    inputs: [parse]
+enrichment_tables:
+  hosts:
+    type: file
+  spare:
+    type: file
+";
+
+    /// The tables are counted and accounted for in words, and not drawn.
+    #[test]
+    fn tables_nothing_flows_through_are_said_not_drawn() {
+        let text = document(&graph_of(WITH_TABLES), "vector.yaml");
+
+        assert!(text.contains("2 enrichment tables, 2 connections."), "{text}");
+        assert!(text.contains("2 enrichment tables are not drawn"), "{text}");
+        assert!(text.contains("1 of the pipeline's tables is read"), "{text}");
+        assert!(!text.contains("[["), "a table was drawn: {text}");
+    }
+
+    #[test]
+    fn asked_for_a_table_is_drawn_with_a_dotted_line_to_its_reader() {
+        let graph = graph_of(WITH_TABLES);
+        let text = super::diagram_drawn(&graph, &crate::tables::drawing(&graph, true));
+
+        assert!(text.contains("n3[[\"hosts<br/>file\"]]"), "{text}");
+        assert!(text.contains("n3 -.-> n1"), "{text}");
+        assert!(!text.contains("spare"), "{text}");
     }
 
     #[test]

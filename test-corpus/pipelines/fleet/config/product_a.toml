@@ -1,0 +1,14 @@
+[[transforms.route_by_product.routes]]
+name = "product_a"
+condition = '.product == "a"'
+
+[[transforms.normalize-router.routes]]
+name = "product_a"
+condition = '.source == "a"'
+
+# The program is a file of its own, as a long one usually is.
+[transforms.product-a-normalizer]
+type = "remap"
+inputs = ["route_by_product.product_a"]
+reroute_dropped = true
+file = "programs/product_a.vrl"

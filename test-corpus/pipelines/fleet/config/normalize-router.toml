@@ -1,0 +1,8 @@
+[transforms.normalize-router]
+type = "exclusive_route"
+inputs = ["*-normalizer"]
+
+# Kept as a tripwire: no event should ever carry both. Nothing reads it.
+[[transforms.normalize-router.routes]]
+name = "imposible"
+condition = '.source == "a" && .source == "b"'
