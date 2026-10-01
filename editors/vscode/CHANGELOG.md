@@ -66,6 +66,14 @@ source at the pin.
   the graph's own nodes — which is the order Tab and a screen reader take —
   all use it, and it no longer changes when a component moves to another file.
   Edges are listed the same way, from the sources to the sinks.
+- **Graphs that share no arrow are drawn apart.** The fixture, like the
+  pipeline it copies, is two: the events, and Vector's own metrics going to a
+  Prometheus exporter. They were laid out as one, the second threaded through
+  the first's columns with an arrow three columns long. Each connected part is
+  now arranged on its own and drawn as a band, the biggest first, titled with
+  the sources its events come from (`input-http`, `vector-metrics`); the
+  Mermaid export frames them as subgraphs. Connected means by an arrow: a
+  table two parts both read does not make them one.
 
 ## 0.7.2 — 2026-09-28
 

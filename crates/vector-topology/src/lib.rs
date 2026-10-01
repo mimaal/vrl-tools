@@ -24,7 +24,7 @@ pub use config::{
     ConfigError, Document, Input, Role,
 };
 pub use graph::{build, focus, Edge, Finding, Graph, Severity};
-pub use layout::{arrange, layout, Layout, Placement, Route, Slot};
+pub use layout::{arrange, clusters, layout, Cluster, Layout, Placement, Route, Slot};
 pub use render::{diagram, document, document_of_files};
 pub use tables::{Lookup, Table};
 

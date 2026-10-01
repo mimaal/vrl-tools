@@ -139,9 +139,15 @@ export interface Topology {
   /** Where each drawn component goes, and the lanes long arrows take. */
   readonly layout: {
     readonly components: readonly TopologyPlacement[];
+    /**
+     * The parts of the graph no arrow joins, the main one first, each named
+     * for its sources. Columns and rows are counted within each.
+     */
+    readonly clusters: readonly { readonly title: string; readonly components: readonly number[] }[];
     readonly routes: readonly {
       readonly from: number;
       readonly to: number;
+      readonly cluster: number;
       readonly via: readonly { readonly column: number; readonly row: number }[];
     }[];
   };
@@ -185,6 +191,8 @@ export interface PipelineOptions {
 export interface TopologyPlacement {
   /** Index into `components`. */
   readonly component: number;
+  /** Index into `layout.clusters`. */
+  readonly cluster: number;
   readonly column: number;
   readonly row: number;
 }

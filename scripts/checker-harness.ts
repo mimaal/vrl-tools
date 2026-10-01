@@ -62,9 +62,11 @@ export interface Topology {
   readonly layout: {
     readonly components: readonly {
       readonly component: number;
+      readonly cluster: number;
       readonly column: number;
       readonly row: number;
     }[];
+    readonly clusters: readonly { readonly title: string; readonly components: readonly number[] }[];
     readonly routes: readonly {
       readonly from: number;
       readonly to: number;

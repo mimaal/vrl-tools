@@ -14,6 +14,7 @@ use std::collections::HashMap;
 
 use crate::config::Role;
 use crate::graph::{Graph, Severity};
+use crate::layout;
 use crate::tables::{self, Drawing};
 
 /// The whole document: the diagram, and what is wrong underneath it.
@@ -83,6 +84,37 @@ fn summary(graph: &Graph) -> String {
     )
 }
 
+/// Declares the nodes of `components`, each line indented by `indent`.
+fn nodes(graph: &Graph, components: &[usize], indent: &str, out: &mut String) {
+    for &position in components {
+        let component = &graph.components[position];
+        let label = escape(&if component.component_type.is_empty() {
+            component.id.clone()
+        } else {
+            format!("{}\n{}", component.id, component.component_type)
+        });
+
+        // Shapes carry the role, so the picture reads without a legend:
+        // rounded for where events come in, square for what happens to them,
+        // a cylinder for where they end up, a framed box for a table, which is
+        // consulted from VRL rather than passed through.
+        //
+        // `vector graph --format mermaid` uses a different set — parallelograms
+        // for sources and sinks, a rhombus for transforms, a cylinder for
+        // tables. These are not copied: a rhombus around two lines of text is
+        // unreadable, and every shape below is one this crate's tests have
+        // pushed a quoted, `<br/>`-carrying label through.
+        let shape = match component.role {
+            Role::Source => format!("([\"{label}\"])"),
+            Role::Transform => format!("[\"{label}\"]"),
+            Role::Sink => format!("[(\"{label}\")]"),
+            Role::Table => format!("[[\"{label}\"]]"),
+        };
+
+        out.push_str(&format!("{indent}{}{shape}\n", node_id(position)));
+    }
+}
+
 /// What the diagram leaves out, said in words: the tables nothing flows
 /// through, and how many of the pipeline's tables its VRL reads.
 fn tables_left_out(graph: &Graph, drawing: &Drawing) -> Option<String> {
@@ -120,8 +152,6 @@ pub fn diagram(graph: &Graph) -> String {
 #[must_use]
 pub fn diagram_drawn(graph: &Graph, drawing: &Drawing) -> String {
     let mut out = String::from("```mermaid\nflowchart LR\n");
-    let drawn = |position: usize| drawing.drawn.get(position).copied().unwrap_or(false);
-
     if drawing.count() == 0 {
         // Mermaid rejects an empty graph outright, and an error where a
         // picture should be reads as a bug in the extension rather than as an
@@ -130,34 +160,18 @@ pub fn diagram_drawn(graph: &Graph, drawing: &Drawing) -> String {
         return out;
     }
 
-    for (position, component) in graph.components.iter().enumerate() {
-        if !drawn(position) {
-            continue;
+    // Parts that share no arrow are framed apart, each under the name of
+    // where its events come from. One part needs no frame.
+    let clusters = layout::clusters(graph, drawing);
+    let framed = clusters.len() > 1;
+    for (number, cluster) in clusters.iter().enumerate() {
+        if framed {
+            out.push_str(&format!("  subgraph c{number}[\"{}\"]\n", escape(&cluster.title)));
         }
-        let label = escape(&if component.component_type.is_empty() {
-            component.id.clone()
-        } else {
-            format!("{}\n{}", component.id, component.component_type)
-        });
-
-        // Shapes carry the role, so the picture reads without a legend:
-        // rounded for where events come in, square for what happens to them,
-        // a cylinder for where they end up, a framed box for a table, which is
-        // consulted from VRL rather than passed through.
-        //
-        // `vector graph --format mermaid` uses a different set — parallelograms
-        // for sources and sinks, a rhombus for transforms, a cylinder for
-        // tables. These are not copied: a rhombus around two lines of text is
-        // unreadable, and every shape below is one this crate's tests have
-        // pushed a quoted, `<br/>`-carrying label through.
-        let shape = match component.role {
-            Role::Source => format!("([\"{label}\"])"),
-            Role::Transform => format!("[\"{label}\"]"),
-            Role::Sink => format!("[(\"{label}\")]"),
-            Role::Table => format!("[[\"{label}\"]]"),
-        };
-
-        out.push_str(&format!("  {}{shape}\n", node_id(position)));
+        nodes(graph, &cluster.components, if framed { "    " } else { "  " }, &mut out);
+        if framed {
+            out.push_str("  end\n");
+        }
     }
 
     // Built once: an edge names its ends, and searching the component list for
@@ -421,6 +435,46 @@ enrichment_tables:
         assert!(text.contains("n3[[\"hosts<br/>file\"]]"), "{text}");
         assert!(text.contains("n3 -.-> n1"), "{text}");
         assert!(!text.contains("spare"), "{text}");
+    }
+
+    /// Two graphs in one config are framed apart, the main one first, each
+    /// under its sources' names.
+    #[test]
+    fn disconnected_parts_are_subgraphs() {
+        let text = diagram(&graph_of(
+            "
+sources:
+  metrics:
+    type: internal_metrics
+  app:
+    type: file
+transforms:
+  parse:
+    type: remap
+    inputs: [app]
+sinks:
+  out:
+    type: console
+    inputs: [parse]
+  prom:
+    type: prometheus_exporter
+    inputs: [metrics]
+",
+        ));
+
+        let app = text.find("subgraph c0[\"app\"]").expect(&text);
+        let metrics = text.find("subgraph c1[\"metrics\"]").expect(&text);
+        assert!(app < metrics, "{text}");
+        assert_eq!(text.matches("\n  end\n").count(), 2, "{text}");
+        // Every node inside a frame, every arrow after them.
+        assert!(text.find("    n1([\"metrics<br/>internal_metrics\"])") > Some(metrics), "{text}");
+        assert!(text.find("-->") > text.rfind("\n  end\n"), "{text}");
+    }
+
+    /// One connected pipeline is drawn as it always was, with no frame.
+    #[test]
+    fn a_single_part_has_no_subgraph() {
+        assert!(!diagram(&graph_of(STRAIGHT)).contains("subgraph"));
     }
 
     #[test]

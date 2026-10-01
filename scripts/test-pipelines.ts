@@ -342,6 +342,39 @@ check(
   ],
 );
 check(
+  'fleet/config: the monitoring graph is a band of its own, after the main one, each named for its source',
+  fleet.layout.clusters.map((cluster) => [
+    cluster.title,
+    cluster.components.map((component) => fleet.components[component]?.id),
+  ]),
+  [
+    [
+      'input-http',
+      [
+        'input-http',
+        'route_by_product',
+        'firewall-demo-normalizer',
+        'product-a-normalizer',
+        'product-b-normalizer',
+        'dropped-handler',
+        'normalize-router',
+        'time-diff',
+        'out',
+        'unmatched',
+      ],
+    ],
+    ['vector-metrics', ['vector-metrics', 'metrics-out']],
+  ],
+);
+check(
+  'fleet/config: the export frames the two graphs apart',
+  [
+    fleet.document.includes('  subgraph c0["input-http"]\n'),
+    fleet.document.includes('  subgraph c1["vector-metrics"]\n'),
+  ],
+  [true, true],
+);
+check(
   'fleet/config: the program a remap keeps in a file is found and read',
   fleet.programs,
   [{ component: 'product-a-normalizer', path: 'programs/product_a.vrl', file: 4, read: true }],

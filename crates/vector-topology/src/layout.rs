@@ -18,6 +18,10 @@
 //!   component and lane moves towards the average row of its neighbours, a
 //!   few passes left to right and back again.
 //!
+//! Before any of that the graph is split into the parts that share no arrow
+//! ([`clusters`]) — the pipeline, and Vector's own metrics beside it — and
+//! each is arranged on its own, so one is not threaded through the other.
+//!
 //! A cycle has no left-to-right order, and a topology with one is already an
 //! error in [`crate::graph`]. It still has to be drawn, so the edge closing
 //! each loop is ignored for placement and drawn going backwards.
@@ -41,6 +45,21 @@ pub struct Layout {
     /// The lanes of every arrow that skips columns. An arrow between
     /// neighbouring columns, or one closing a loop, has none.
     pub routes: Vec<Route>,
+    /// The parts of the graph no arrow joins, the main one first. Columns and
+    /// rows are counted within each.
+    pub clusters: Vec<Cluster>,
+}
+
+/// A part of the graph that shares no arrow with the rest: one connected
+/// subgraph, drawn as a band of its own.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Cluster {
+    /// What it is called: the sources its events come from, or, when it has
+    /// none, its first component.
+    pub title: String,
+    /// Indexes into [`Graph::components`], in their order.
+    pub components: Vec<usize>,
 }
 
 /// Where one component goes.
@@ -49,7 +68,9 @@ pub struct Layout {
 pub struct Placement {
     /// Index into [`Graph::components`].
     pub component: usize,
-    /// Zero-based, left to right.
+    /// Index into [`Layout::clusters`]: the band it is in.
+    pub cluster: usize,
+    /// Zero-based, left to right, within the cluster.
     pub column: usize,
     /// Zero-based, top to bottom, within the column. Lanes count as rows.
     pub row: usize,
@@ -63,6 +84,8 @@ pub struct Route {
     /// the same lanes, whichever output it leaves by.
     pub from: usize,
     pub to: usize,
+    /// The cluster both ends are in.
+    pub cluster: usize,
     /// One slot per column crossed, left to right.
     pub via: Vec<Slot>,
 }
@@ -91,14 +114,152 @@ pub fn layout(graph: &Graph) -> Layout {
 /// the pipeline around them.
 #[must_use]
 pub fn arrange(graph: &Graph, drawing: &Drawing) -> Layout {
-    // The drawn components, numbered among themselves; everything below works
-    // on those numbers and `shown` turns them back.
-    let shown: Vec<usize> = (0..graph.components.len())
-        .filter(|&position| drawing.drawn.get(position).copied().unwrap_or(false))
+    let clusters = clusters(graph, drawing);
+    let mut layout = Layout::default();
+    for (number, cluster) in clusters.iter().enumerate() {
+        arrange_cluster(graph, drawing, number, &cluster.components, &mut layout);
+    }
+    // In the order of the components, as before there were clusters: it is
+    // the order whoever draws creates the nodes in.
+    layout.components.sort_by_key(|placement| placement.component);
+    layout.clusters = clusters;
+    layout
+}
+
+/// The parts of what is drawn that no arrow joins.
+///
+/// Connected by the edges and by nothing else: a table two parts both read
+/// does not make them one, any more than a shared file does. A table drawn
+/// for its lookups goes with the first component that reads it.
+///
+/// The biggest comes first — that is the pipeline, and the rest are what runs
+/// beside it — and equal ones keep the order of their first component.
+#[must_use]
+pub fn clusters(graph: &Graph, drawing: &Drawing) -> Vec<Cluster> {
+    let count = graph.components.len();
+    let drawn = |position: usize| drawing.drawn.get(position).copied().unwrap_or(false);
+    // A table that is there for its lookups, and that no arrow touches.
+    let attached = |position: usize| graph.components[position].is_lookup_table();
+
+    let mut index: HashMap<&str, usize> = HashMap::with_capacity(count);
+    for (position, component) in graph.components.iter().enumerate() {
+        if drawn(position) {
+            index.entry(component.id.as_str()).or_insert(position);
+        }
+    }
+
+    // Union-find, with the smaller index as the root so a part is named by
+    // its first component. Path halving keeps it iterative.
+    let mut parent: Vec<usize> = (0..count).collect();
+    fn root(parent: &mut [usize], mut node: usize) -> usize {
+        while parent[node] != node {
+            parent[node] = parent[parent[node]];
+            node = parent[node];
+        }
+        node
+    }
+    for edge in &graph.edges {
+        let (Some(&from), Some(&to)) = (index.get(edge.from.as_str()), index.get(edge.to.as_str()))
+        else {
+            continue;
+        };
+        let (a, b) = (root(&mut parent, from), root(&mut parent, to));
+        if a != b {
+            parent[a.max(b)] = a.min(b);
+        }
+    }
+
+    let mut number: HashMap<usize, usize> = HashMap::new();
+    let mut members: Vec<Vec<usize>> = Vec::new();
+    for position in 0..count {
+        if !drawn(position) || attached(position) {
+            continue;
+        }
+        let part = root(&mut parent, position);
+        let slot = *number.entry(part).or_insert_with(|| {
+            members.push(Vec::new());
+            members.len() - 1
+        });
+        members[slot].push(position);
+    }
+
+    let mut order: Vec<usize> = (0..members.len()).collect();
+    // Stable, so equal parts keep the order of their first component. Sized
+    // before the tables join, which are not what makes a pipeline the main one.
+    order.sort_by_key(|&slot| std::cmp::Reverse(members[slot].len()));
+    let mut place = vec![0usize; members.len()];
+    for (position, &slot) in order.iter().enumerate() {
+        place[slot] = position;
+    }
+
+    let mut parts: Vec<Vec<usize>> = order.iter().map(|&slot| members[slot].clone()).collect();
+    let mut taken = vec![false; count];
+    for &(table, reader) in &drawing.lookups {
+        if table >= count || reader >= count || taken[table] || !drawn(table) || !attached(table) {
+            continue;
+        }
+        if let Some(&slot) = number.get(&root(&mut parent, reader)) {
+            taken[table] = true;
+            parts[place[slot]].push(table);
+        }
+    }
+    // A table drawn with no reader drawn has nowhere to go but a part of its
+    // own. `tables::drawing` never produces one; `Drawing::everything` does.
+    for position in 0..count {
+        if drawn(position) && attached(position) && !taken[position] {
+            parts.push(vec![position]);
+        }
+    }
+
+    parts
+        .into_iter()
+        .map(|mut components| {
+            components.sort_unstable();
+            Cluster {
+                title: title(graph, &components),
+                components,
+            }
+        })
+        .collect()
+}
+
+/// How many sources a cluster's title names before it counts the rest.
+const TITLE_SOURCES: usize = 3;
+
+fn title(graph: &Graph, components: &[usize]) -> String {
+    let sources: Vec<&str> = components
+        .iter()
+        .map(|&position| &graph.components[position])
+        .filter(|component| component.role == Role::Source)
+        .map(|component| component.id.as_str())
         .collect();
+
+    match sources.len() {
+        0 => components
+            .first()
+            .map_or_else(String::new, |&position| graph.components[position].id.clone()),
+        count if count > TITLE_SOURCES => format!(
+            "{} +{}",
+            sources[..TITLE_SOURCES].join(", "),
+            count - TITLE_SOURCES,
+        ),
+        _ => sources.join(", "),
+    }
+}
+
+/// Arranges one cluster, adding its placements and routes to `layout`.
+fn arrange_cluster(
+    graph: &Graph,
+    drawing: &Drawing,
+    cluster: usize,
+    shown: &[usize],
+    layout: &mut Layout,
+) {
+    // The components of the cluster, numbered among themselves; everything
+    // below works on those numbers and `shown` turns them back.
     let count = shown.len();
     if count == 0 {
-        return Layout::default();
+        return;
     }
     let mut local: Vec<Option<usize>> = vec![None; graph.components.len()];
     for (position, &component) in shown.iter().enumerate() {
@@ -187,29 +348,24 @@ pub fn arrange(graph: &Graph, drawing: &Drawing) -> Layout {
 
     let rows = rows(&columns, &steps);
 
-    Layout {
-        components: (0..count)
-            .map(|position| Placement {
-                component: shown[position],
-                column: columns[position],
-                row: rows[position],
-            })
-            .collect(),
-        routes: chains
+    layout.components.extend((0..count).map(|position| Placement {
+        component: shown[position],
+        cluster,
+        column: columns[position],
+        row: rows[position],
+    }));
+    layout.routes.extend(chains.into_iter().map(|(from, to, lanes)| Route {
+        from: shown[from],
+        to: shown[to],
+        cluster,
+        via: lanes
             .into_iter()
-            .map(|(from, to, lanes)| Route {
-                from: shown[from],
-                to: shown[to],
-                via: lanes
-                    .into_iter()
-                    .map(|lane| Slot {
-                        column: columns[lane],
-                        row: rows[lane],
-                    })
-                    .collect(),
+            .map(|lane| Slot {
+                column: columns[lane],
+                row: rows[lane],
             })
             .collect(),
-    }
+    }));
 }
 
 /// The links that do not close a loop.
@@ -377,7 +533,7 @@ mod tests {
         layout(&graph)
             .components
             .into_iter()
-            .map(|Placement { component, column, row }| {
+            .map(|Placement { component, column, row, .. }| {
                 (graph.components[component].id.clone(), column, row)
             })
             .collect()
@@ -507,6 +663,79 @@ mod tests {
         for id in ["in", "parse", "out"] {
             assert_eq!(column(&with, id), column(&without, id), "{id} moved");
         }
+    }
+
+    const TWO: &str = "sources:\n  metrics:\n    type: internal_metrics\n  http:\n    type: http_server\n  syslog:\n    type: syslog\n\
+        transforms:\n  parse:\n    type: remap\n    inputs: [http, syslog]\n    source: '.h = get_enrichment_table_record!(\"hosts\", {})'\n\
+        \x20 count:\n    type: remap\n    inputs: [metrics]\n    source: '.h = get_enrichment_table_record!(\"hosts\", {})'\n\
+        sinks:\n  out:\n    type: console\n    inputs: [parse]\n  prom:\n    type: prometheus_exporter\n    inputs: [count]\n\
+        enrichment_tables:\n  hosts:\n    type: file\n";
+
+    /// A pipeline and Vector's own metrics beside it share no arrow, so they
+    /// are two bands: the bigger first, each named for where its events come
+    /// from, each with columns of its own.
+    #[test]
+    fn parts_no_arrow_joins_are_clusters_of_their_own() {
+        let graph = build(read_yaml(TWO).expect("parses"));
+        let arranged = arrange(&graph, &drawing(&graph, false));
+        let ids = |components: &[usize]| -> Vec<&str> {
+            components.iter().map(|&c| graph.components[c].id.as_str()).collect()
+        };
+
+        assert_eq!(arranged.clusters.len(), 2);
+        assert_eq!(arranged.clusters[0].title, "http, syslog");
+        assert_eq!(ids(&arranged.clusters[0].components), ["http", "syslog", "parse", "out"]);
+        assert_eq!(arranged.clusters[1].title, "metrics");
+        assert_eq!(ids(&arranged.clusters[1].components), ["metrics", "count", "prom"]);
+
+        for placement in &arranged.components {
+            let id = graph.components[placement.component].id.as_str();
+            let cluster = usize::from(["metrics", "count", "prom"].contains(&id));
+            assert_eq!(placement.cluster, cluster, "{id}");
+        }
+        // Each starts at its own first column.
+        let column = |id: &str| {
+            arranged
+                .components
+                .iter()
+                .find(|p| graph.components[p.component].id == id)
+                .map(|p| p.column)
+        };
+        assert_eq!(column("http"), Some(0));
+        assert_eq!(column("metrics"), Some(0));
+        assert_eq!(column("out"), Some(2));
+        assert_eq!(column("prom"), Some(2));
+    }
+
+    /// A table both parts read is drawn once, with the first to read it, and
+    /// does not make one part of two.
+    #[test]
+    fn a_table_two_clusters_read_does_not_join_them() {
+        let graph = build(read_yaml(TWO).expect("parses"));
+        let arranged = arrange(&graph, &drawing(&graph, true));
+
+        assert_eq!(arranged.clusters.len(), 2);
+        let hosts = graph.components.iter().position(|c| c.id == "hosts").expect("hosts");
+        let holding: Vec<usize> = (0..2)
+            .filter(|&cluster| arranged.clusters[cluster].components.contains(&hosts))
+            .collect();
+        assert_eq!(holding.len(), 1, "{:?}", arranged.clusters);
+    }
+
+    /// A component nothing is wired to is a part of its own, not a stray box
+    /// inside somebody else's.
+    #[test]
+    fn an_unwired_component_is_its_own_cluster() {
+        let graph = build(
+            read_yaml(
+                "sources:\n  in:\n    type: stdin\n  spare:\n    type: stdin\n\
+                 sinks:\n  out:\n    type: console\n    inputs: [in]\n",
+            )
+            .expect("parses"),
+        );
+        let arranged = layout(&graph);
+        let titles: Vec<&str> = arranged.clusters.iter().map(|c| c.title.as_str()).collect();
+        assert_eq!(titles, ["in", "spare"]);
     }
 
     #[test]

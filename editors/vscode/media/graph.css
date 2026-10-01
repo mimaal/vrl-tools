@@ -162,6 +162,28 @@ svg#canvas.panning {
   display: flex;
 }
 
+/*
+ * A part of the graph no arrow joins to the rest: the pipeline, and whatever
+ * runs beside it. Framed, and named for where its events come from.
+ */
+.band rect {
+  fill: var(--surface);
+  fill-opacity: 0.35;
+  stroke: var(--border);
+  stroke-dasharray: 3 4;
+}
+
+.band text {
+  fill: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+svg.overview .band text {
+  font-size: 20px;
+}
+
 /* ---------- nodes ---------- */
 
 .node {

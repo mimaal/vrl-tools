@@ -35,6 +35,12 @@
   /** The gap between two lanes, which only need to stay apart as lines. */
   const LANE_GAP = 6;
   const PAD = 48;
+  /** Between two parts of the graph that share no arrow, each in its band. */
+  const BAND_GAP = 44;
+  /** Between a band's frame and the boxes in it. */
+  const BAND_PAD = 16;
+  /** The room a band's name takes above its frame. */
+  const BAND_TITLE = 26;
   const MIN_ZOOM = 0.1;
   const MAX_ZOOM = 3;
   /** Below this zoom the boxes' small print is unreadable, so it is swapped for big names. */
@@ -44,6 +50,7 @@
 
   const svg = /** @type {SVGSVGElement} */ (document.querySelector('#canvas'));
   const viewport = /** @type {SVGGElement} */ (document.querySelector('#viewport'));
+  const bandLayer = /** @type {SVGGElement} */ (document.querySelector('#bands'));
   const edgeLayer = /** @type {SVGGElement} */ (document.querySelector('#edges'));
   const labelLayer = /** @type {SVGGElement} */ (document.querySelector('#labels'));
   const nodeLayer = /** @type {SVGGElement} */ (document.querySelector('#nodes'));
@@ -258,8 +265,10 @@
     renderFocus(analysis.focus ?? null);
     empty.classList.toggle('visible', components.length === 0);
 
-    const at = place(components, layout);
-    const lanes = laneCentres(components, layout);
+    const grid = stacks(layout);
+    const at = place(components, layout, grid);
+    const lanes = laneCentres(components, layout, grid);
+    drawBands(grid.bands);
 
     // A finding points at a place in the config: the component's name, or
     // one of its inputs. Either way it belongs to that component's box.
@@ -332,19 +341,22 @@
    * the tallest, so a pipeline that fans out and back in reads as a shape
    * rather than a staircase.
    *
+   * The layout comes in clusters — the parts of the graph no arrow joins —
+   * and each is a band of its own, one under the other, the main one on top.
+   *
    * @param {any[]} components
    * @param {{components: any[], routes: any[]}} layout
+   * @param {ReturnType<typeof stacks>} grid
    * @returns {Map<string, Placed>}
    */
-  function place(components, layout) {
-    const { top, shift } = stacks(layout);
+  function place(components, layout, grid) {
     /** @type {Map<string, Placed>} */
     const at = new Map();
     for (const placement of layout.components) {
       const component = components[placement.component];
       at.set(component.id, {
         x: columnX(placement.column),
-        y: shift(placement.column) + (top.get(`c${placement.component}`) ?? 0),
+        y: grid.shift(placement.cluster ?? 0, placement.column) + (grid.top.get(`c${placement.component}`) ?? 0),
         component,
       });
     }
@@ -354,59 +366,125 @@
   /**
    * @param {any[]} components
    * @param {{components: any[], routes: any[]}} layout
+   * @param {ReturnType<typeof stacks>} grid
    * @returns {Map<string, {x: number, y: number}[]>} lane centres per pair of components
    */
-  function laneCentres(components, layout) {
-    const { top, shift } = stacks(layout);
+  function laneCentres(components, layout, grid) {
     const lanes = new Map();
     for (const route of layout.routes) {
+      const cluster = route.cluster ?? 0;
       lanes.set(
         pair(components[route.from].id, components[route.to].id),
         route.via.map((/** @type {any} */ slot) => ({
           x: columnX(slot.column),
-          y: shift(slot.column) + (top.get(`l${slot.column}:${slot.row}`) ?? 0) + LANE_H / 2,
+          y:
+            grid.shift(cluster, slot.column) +
+            (grid.top.get(`l${cluster}:${slot.column}:${slot.row}`) ?? 0) +
+            LANE_H / 2,
         })),
       );
     }
     return lanes;
   }
 
-  /** @param {{components: any[], routes: any[]}} layout */
+  /**
+   * Where every box and lane goes down its column, and where each cluster's
+   * band starts.
+   *
+   * @param {{components: any[], routes: any[], clusters?: {title: string}[]}} layout
+   */
   function stacks(layout) {
-    /** @type {Map<number, {row: number, height: number, lane: boolean, key: string}[]>} */
-    const columns = new Map();
-    const add = (/** @type {number} */ column, /** @type {any} */ item) =>
+    /** @type {Map<number, Map<number, {row: number, height: number, lane: boolean, key: string}[]>>} */
+    const clusters = new Map();
+    const add = (/** @type {number} */ cluster, /** @type {number} */ column, /** @type {any} */ item) => {
+      const columns = clusters.get(cluster) ?? new Map();
       columns.set(column, [...(columns.get(column) ?? []), item]);
+      clusters.set(cluster, columns);
+    };
     for (const p of layout.components) {
-      add(p.column, { row: p.row, height: NODE_H, lane: false, key: `c${p.component}` });
+      add(p.cluster ?? 0, p.column, { row: p.row, height: NODE_H, lane: false, key: `c${p.component}` });
     }
     for (const route of layout.routes) {
+      const cluster = route.cluster ?? 0;
       for (const slot of route.via) {
-        add(slot.column, { row: slot.row, height: LANE_H, lane: true, key: `l${slot.column}:${slot.row}` });
+        add(cluster, slot.column, {
+          row: slot.row,
+          height: LANE_H,
+          lane: true,
+          key: `l${cluster}:${slot.column}:${slot.row}`,
+        });
       }
     }
 
     /** @type {Map<string, number>} */
     const top = new Map();
-    /** @type {Map<number, number>} */
+    /** @type {Map<string, number>} */
     const heights = new Map();
-    let tallest = 0;
-    for (const [column, items] of columns) {
-      items.sort((a, b) => a.row - b.row);
-      let y = 0;
-      items.forEach((item, index) => {
-        const previous = items[index - 1];
-        if (previous) {
-          y += previous.lane && item.lane ? LANE_GAP : ROW_GAP;
-        }
-        top.set(item.key, y);
-        y += item.height;
-      });
-      heights.set(column, y);
-      tallest = Math.max(tallest, y);
+    /** @type {Map<number, number>} */
+    const tallest = new Map();
+    let widest = 0;
+    for (const [cluster, columns] of clusters) {
+      for (const [column, items] of columns) {
+        items.sort((a, b) => a.row - b.row);
+        let y = 0;
+        items.forEach((item, index) => {
+          const previous = items[index - 1];
+          if (previous) {
+            y += previous.lane && item.lane ? LANE_GAP : ROW_GAP;
+          }
+          top.set(item.key, y);
+          y += item.height;
+        });
+        heights.set(`${cluster}:${column}`, y);
+        tallest.set(cluster, Math.max(tallest.get(cluster) ?? 0, y));
+        widest = Math.max(widest, column);
+      }
     }
-    const shift = (/** @type {number} */ column) => PAD + (tallest - (heights.get(column) ?? 0)) / 2;
-    return { top, shift };
+
+    // One band under the other, in the layout's order. A graph that is all
+    // one part has no band to draw and starts where it always did.
+    const framed = clusters.size > 1;
+    /** @type {Map<number, number>} */
+    const start = new Map();
+    /** @type {{title: string, x: number, y: number, width: number, height: number}[]} */
+    const bands = [];
+    let y = PAD;
+    for (const cluster of [...clusters.keys()].sort((a, b) => a - b)) {
+      const height = tallest.get(cluster) ?? 0;
+      if (framed) {
+        y += BAND_TITLE;
+        bands.push({
+          title: layout.clusters?.[cluster]?.title ?? '',
+          x: PAD - BAND_PAD,
+          y: y - BAND_PAD,
+          width: (widest + 1) * NODE_W + widest * COL_GAP + 2 * BAND_PAD,
+          height: height + 2 * BAND_PAD,
+        });
+      }
+      start.set(cluster, y);
+      y += height + (framed ? BAND_GAP : 0);
+    }
+
+    const shift = (/** @type {number} */ cluster, /** @type {number} */ column) =>
+      (start.get(cluster) ?? PAD) +
+      ((tallest.get(cluster) ?? 0) - (heights.get(`${cluster}:${column}`) ?? 0)) / 2;
+    return { top, shift, bands };
+  }
+
+  /**
+   * The frame and the name of each part of the graph, when there is more than
+   * one. Named for where its events come from.
+   *
+   * @param {{title: string, x: number, y: number, width: number, height: number}[]} bands
+   */
+  function drawBands(bands) {
+    bandLayer.replaceChildren();
+    for (const band of bands) {
+      const group = el('g', { class: 'band' }, bandLayer);
+      el('rect', { x: band.x, y: band.y, width: band.width, height: band.height, rx: 12, ry: 12 }, group);
+      const title = el('text', { x: band.x + 4, y: band.y - 8 }, group);
+      title.textContent = band.title;
+    }
   }
 
   /** @param {number} column */
