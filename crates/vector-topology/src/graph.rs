@@ -21,7 +21,8 @@
 //! - an output nobody reads — `validation::warnings`, which is the only one of
 //!   the lot Vector treats as a warning rather than a refusal to start.
 
-use std::collections::{HashMap, HashSet};
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use editor_text::Range;
 
@@ -164,11 +165,103 @@ pub fn build(document: Document) -> Graph {
     cycles(&components, &edges, &index, &mut findings);
     unconsumed(&components, &edges, &mut findings);
 
+    let order = flow_order(&components, &edges, &index);
+    drop(written);
+    drop(index);
+    let (components, edges) = reordered(components, edges, &order);
+
     Graph {
         components,
         edges,
         findings,
     }
+}
+
+/// The order the components are handed on in: the order events meet them.
+///
+/// Sources, then transforms with every transform after the ones feeding it,
+/// then sinks, then enrichment tables. Whatever that leaves undecided — two
+/// sources, two transforms neither of which feeds the other — goes by name.
+///
+/// Declaration order is what this replaces, and across sixteen files it meant
+/// nothing: the files are read in the order they are named, so a router came
+/// after the remaps it feeds whenever its file sorted later. Everything that
+/// lists components — the sidebar, the Mermaid export, the order of the
+/// graph's own nodes for a screen reader or the Tab key — reads this order,
+/// and it does not move when a component moves to another file.
+///
+/// Kahn's algorithm over the transforms, with the ready ones in a heap so the
+/// smallest name always goes next. Iterative, like [`cycles`], and for the
+/// same reason. Transforms on a loop never become ready; they follow the
+/// rest, by name, which is as good an order as a loop has.
+fn flow_order(components: &[Component], edges: &[Edge], index: &HashMap<&str, usize>) -> Vec<usize> {
+    let by_name = |role: Role| {
+        let mut of_role: Vec<usize> = (0..components.len())
+            .filter(|&position| components[position].role == role)
+            .collect();
+        // Stable, so two components of one name keep the order they had.
+        of_role.sort_by(|&a, &b| components[a].id.cmp(&components[b].id));
+        of_role
+    };
+
+    let transforms = by_name(Role::Transform);
+    let mut waiting = vec![0usize; components.len()];
+    let mut feeds: Vec<Vec<usize>> = vec![Vec::new(); components.len()];
+    for edge in edges {
+        let (Some(&from), Some(&to)) = (index.get(edge.from.as_str()), index.get(edge.to.as_str()))
+        else {
+            continue;
+        };
+        if components[from].role == Role::Transform && components[to].role == Role::Transform {
+            feeds[from].push(to);
+            waiting[to] += 1;
+        }
+    }
+
+    let mut ready: BinaryHeap<Reverse<(&str, usize)>> = transforms
+        .iter()
+        .filter(|&&position| waiting[position] == 0)
+        .map(|&position| Reverse((components[position].id.as_str(), position)))
+        .collect();
+    let mut placed = vec![false; components.len()];
+    let mut order = by_name(Role::Source);
+    while let Some(Reverse((_, position))) = ready.pop() {
+        placed[position] = true;
+        order.push(position);
+        for &next in &feeds[position] {
+            waiting[next] -= 1;
+            if waiting[next] == 0 {
+                ready.push(Reverse((components[next].id.as_str(), next)));
+            }
+        }
+    }
+    order.extend(transforms.iter().copied().filter(|&position| !placed[position]));
+    order.extend(by_name(Role::Sink));
+    order.extend(by_name(Role::Table));
+    order
+}
+
+/// The components in `order`, and the edges in the order of the components
+/// they leave and then the ones they reach — so a list of edges reads from
+/// the sources to the sinks, like the list of components.
+fn reordered(
+    components: Vec<Component>,
+    mut edges: Vec<Edge>,
+    order: &[usize],
+) -> (Vec<Component>, Vec<Edge>) {
+    let mut slots: Vec<Option<Component>> = components.into_iter().map(Some).collect();
+    let components: Vec<Component> = order.iter().filter_map(|&position| slots[position].take()).collect();
+
+    let mut rank: HashMap<&str, usize> = HashMap::with_capacity(components.len());
+    for (position, component) in components.iter().enumerate() {
+        rank.entry(component.id.as_str()).or_insert(position);
+    }
+    let of = |name: &str| rank.get(name).copied().unwrap_or(usize::MAX);
+    // Stable, so the outputs of one component stay in the order they were
+    // read in when they go to the same place.
+    edges.sort_by_key(|edge| (of(&edge.from), of(&edge.to)));
+    drop(rank);
+    (components, edges)
 }
 
 /// The part of `graph` events can take through `id`: everything that can

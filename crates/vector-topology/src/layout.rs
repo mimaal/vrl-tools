@@ -214,10 +214,10 @@ pub fn arrange(graph: &Graph, drawing: &Drawing) -> Layout {
 
 /// The links that do not close a loop.
 ///
-/// A depth-first walk from every component in declaration order; a link back
-/// to something still on the walk's path is the one that closes a cycle.
-/// Declaration order makes the choice stable, so the picture does not flip
-/// while somebody types.
+/// A depth-first walk from every component in the order they come in; a link
+/// back to something still on the walk's path is the one that closes a cycle.
+/// That order is by role and name, so the choice is stable and the picture
+/// does not flip while somebody types.
 fn without_back_edges(count: usize, links: &[(usize, usize)]) -> Vec<(usize, usize)> {
     #[derive(Clone, Copy, PartialEq)]
     enum State {
@@ -296,8 +296,9 @@ fn columns(roles: &[Role], forward: &[(usize, usize)]) -> Vec<usize> {
 fn rows(columns: &[usize], forward: &[(usize, usize)]) -> Vec<usize> {
     let width = columns.iter().copied().max().map_or(0, |last| last + 1);
 
-    // Declaration order first: it is what the author wrote, and a sensible
-    // starting point for everything the passes below do not change.
+    // The order the components come in first — the order events meet them,
+    // see `graph::build` — which is a sensible starting point for everything
+    // the passes below do not change.
     let mut order: Vec<Vec<usize>> = vec![Vec::new(); width];
     for (component, &column) in columns.iter().enumerate() {
         order[column].push(component);

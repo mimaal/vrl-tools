@@ -57,6 +57,15 @@ source at the pin.
   its own row.
 - **An unread `dropped` is a badge on the node.** It was only a line in the
   problems list; read by something, it is still an arrow.
+- **Components come in the order events meet them.** They came in the order
+  they were read — file by file, and within a file sources, transforms, sinks
+  — so across sixteen files a router was listed after the remaps it feeds
+  whenever its file sorted later. The order is now sources, then transforms
+  with each one after everything that feeds it, then sinks, then tables, and
+  by name wherever that leaves a choice. The sidebar, the Mermaid export and
+  the graph's own nodes — which is the order Tab and a screen reader take —
+  all use it, and it no longer changes when a component moves to another file.
+  Edges are listed the same way, from the sources to the sinks.
 
 ## 0.7.2 — 2026-09-28
 

@@ -430,7 +430,7 @@ fn routers_and_output_wildcards_resolve_without_findings() {
         .collect();
     assert_eq!(
         alerts,
-        [("nginx_route", Some("errors")), ("api_route", Some("errors"))],
+        [("api_route", Some("errors")), ("nginx_route", Some("errors"))],
         "`*_route.errors` takes the errors output of both routers",
     );
 

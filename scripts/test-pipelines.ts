@@ -324,6 +324,24 @@ check(
   { nodes: 12, atMostThirty: true, tables: [] },
 );
 check(
+  'fleet/config: the nodes come in the order events meet them, whatever file each is in',
+  placed(fleet),
+  [
+    'input-http',
+    'vector-metrics',
+    'route_by_product',
+    'firewall-demo-normalizer',
+    'product-a-normalizer',
+    'product-b-normalizer',
+    'dropped-handler',
+    'normalize-router',
+    'time-diff',
+    'metrics-out',
+    'out',
+    'unmatched',
+  ],
+);
+check(
   'fleet/config: the program a remap keeps in a file is found and read',
   fleet.programs,
   [{ component: 'product-a-normalizer', path: 'programs/product_a.vrl', file: 4, read: true }],

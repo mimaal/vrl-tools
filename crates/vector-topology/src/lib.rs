@@ -957,6 +957,118 @@ sinks:
         assert_eq!(unknown.focus, None);
     }
 
+    /// Declared backwards and across files on purpose: the order handed on is
+    /// the order events meet the components, whatever file each is in.
+    #[test]
+    fn components_come_in_the_order_events_meet_them() {
+        let analysis = analyse_files(
+            &[
+                file(
+                    "config/a-sinks.toml",
+                    "[sinks.zeta]
+type = \"console\"
+inputs = [\"last\"]
+                     [sinks.alpha]
+type = \"console\"
+inputs = [\"last\", \"beta\"]
+                     [enrichment_tables.hosts]
+type = \"file\"
+",
+                ),
+                file(
+                    "config/b-transforms.toml",
+                    "[transforms.last]
+type = \"remap\"
+inputs = [\"middle\"]
+                     [transforms.middle]
+type = \"remap\"
+inputs = [\"zz_first\"]
+                     [transforms.zz_first]
+type = \"remap\"
+inputs = [\"in_b\", \"in_a\"]
+                     [transforms.beta]
+type = \"remap\"
+inputs = [\"in_a\"]
+",
+                ),
+                file(
+                    "config/c-sources.toml",
+                    "[sources.in_b]
+type = \"stdin\"
+[sources.in_a]
+type = \"stdin\"
+",
+                ),
+            ],
+            "config",
+        );
+
+        assert!(analysis.findings.is_empty(), "{:#?}", analysis.findings);
+        let ids: Vec<&str> = analysis.components.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            // Sources by name; `beta` and `zz_first` are both ready at once
+            // and go by name, then the chain in the only order it has; sinks
+            // by name; the table last.
+            ["in_a", "in_b", "beta", "zz_first", "middle", "last", "alpha", "zeta", "hosts"],
+        );
+
+        let edges: Vec<String> =
+            analysis.edges.iter().map(|edge| format!("{}>{}", edge.from, edge.to)).collect();
+        assert_eq!(
+            edges,
+            [
+                "in_a>beta",
+                "in_a>zz_first",
+                "in_b>zz_first",
+                "beta>alpha",
+                "zz_first>middle",
+                "middle>last",
+                "last>alpha",
+                "last>zeta",
+            ],
+        );
+
+        // The diagram declares its nodes in that order too.
+        let nodes: Vec<&str> = analysis
+            .document
+            .lines()
+            .filter(|line| line.starts_with("  n") && !line.contains("-->"))
+            .map(|line| line.split('"').nth(1).and_then(|label| label.split('<').next()).unwrap_or(""))
+            .collect();
+        assert_eq!(nodes, &ids[..8], "the table is not drawn");
+    }
+
+    /// A loop has no order. It is reported as one, and its components still
+    /// come out, once each, after everything that has a place.
+    #[test]
+    fn a_loop_does_not_lose_or_repeat_a_component() {
+        let analysis = analyse_files(
+            &[file(
+                "vector.toml",
+                "[sources.in]
+type = \"stdin\"
+                 [transforms.b]
+type = \"remap\"
+inputs = [\"a\"]
+                 [transforms.a]
+type = \"remap\"
+inputs = [\"b\", \"in\"]
+                 [transforms.ok]
+type = \"remap\"
+inputs = [\"in\"]
+                 [sinks.out]
+type = \"console\"
+inputs = [\"a\", \"ok\"]
+",
+            )],
+            "config",
+        );
+
+        let ids: Vec<&str> = analysis.components.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, ["in", "ok", "a", "b", "out"]);
+    }
+
     const LOOKUPS: &str = "[sources.in]\ntype = \"stdin\"\n\
         [transforms.inline]\ntype = \"remap\"\ninputs = [\"in\"]\n\
         source = '.a = get_enrichment_table_record!(\"hosts\", {})'\n\
@@ -983,7 +1095,7 @@ sinks:
             .iter()
             .map(|p| analysis.components[p.component].id.as_str())
             .collect();
-        assert_eq!(placed, ["in", "inline", "filed", "out"]);
+        assert_eq!(placed, ["in", "filed", "inline", "out"]);
         assert!(analysis.findings.is_empty(), "an unread table is not a finding");
     }
 
@@ -1012,7 +1124,7 @@ sinks:
             ),
         );
         assert!(after.programs[0].read);
-        assert_eq!(readers(&after, "hosts"), ["inline", "filed"]);
+        assert_eq!(readers(&after, "hosts"), ["filed", "inline"]);
         assert_eq!(readers(&after, "geo"), ["filed"]);
         assert!(readers(&after, "spare").is_empty());
     }
@@ -1031,7 +1143,7 @@ sinks:
         };
 
         let shown = super::analyse_pipeline(&files, "config", &options(r#"{"showTables":true}"#));
-        assert_eq!(placed(&shown), ["in", "inline", "filed", "out", "hosts"]);
+        assert_eq!(placed(&shown), ["in", "filed", "inline", "out", "hosts"]);
         assert_eq!(shown.lookups.len(), 1);
         assert_eq!((shown.lookups[0].table.as_str(), shown.lookups[0].reader.as_str()), ("hosts", "inline"));
 
