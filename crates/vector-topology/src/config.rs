@@ -27,6 +27,7 @@ use saphyr::{LoadableYamlNode, MarkedYaml};
 use crate::graph::{Finding, Severity};
 use crate::lookups::{self, Found};
 use crate::outputs::{self, Fields};
+use crate::routes;
 use crate::terminal::{self, Marker};
 use crate::vars::{self, Interpolated, Syntax};
 
@@ -773,7 +774,7 @@ pub(crate) fn assemble(
             let elsewhere = declared.contains(&(entry.role, entry.id.clone()));
             findings.push(untyped(&entry, elsewhere));
         }
-        push(&mut components, entry, markers, &mut used, &mut findings);
+        push(&mut components, entry, names, markers, &mut used, &mut findings);
     }
     findings.extend(terminal::stray(markers, &used));
     (components, findings)
@@ -1021,6 +1022,7 @@ fn clash(id: &str, found: &Clash, winner: Origin, names: &[String]) -> Finding {
 fn push(
     components: &mut Vec<Component>,
     entry: Entry,
+    names: &[String],
     markers: &[Marker],
     used: &mut [bool],
     findings: &mut Vec<Finding>,
@@ -1083,6 +1085,9 @@ fn push(
             .and_then(|encoding| encoding.get("include_headers")),
         Some(Value::Bool(false)),
     );
+    if entry.role == Role::Transform && component_type == "exclusive_route" {
+        findings.extend(hidden_routes(&entry.id, &entry.body, &output_origins, names));
+    }
     let pieces: Vec<Origin> = parts.iter().map(|part| part.origin).collect();
     let spots: Vec<(String, Origin, Origin)> = parts
         .iter()
@@ -1130,6 +1135,70 @@ fn push(
         path,
         csv_headers,
     });
+}
+
+/// A finding for every route of an `exclusive_route` that an earlier route
+/// hides. See [`crate::routes`] for what is and is not decided.
+///
+/// `body` is the merged one, so its `routes` are in the order Vector tries
+/// them, which is the order of `origins` too: the named outputs are the
+/// routes, then `_unmatched`.
+fn hidden_routes(id: &str, body: &Value, origins: &[Origin], names: &[String]) -> Vec<Finding> {
+    let Some(Value::List(entries)) = body.get("routes") else {
+        return Vec::new();
+    };
+    // Only what has a name is a route to Vector, and so has an origin.
+    let named: Vec<(&str, Option<&str>)> = entries
+        .iter()
+        .filter_map(|entry| match entry.get("name") {
+            Some(Value::Text(name)) => Some((name.as_str(), vrl_condition(entry.get("condition")))),
+            _ => None,
+        })
+        .collect();
+    let conditions: Vec<Option<&str>> = named.iter().map(|(_, condition)| *condition).collect();
+    let short = |origin: Option<&Origin>| {
+        origin
+            .and_then(|origin| names.get(origin.file))
+            .map(|name| name.rsplit(['/', '\\']).next().unwrap_or(name).to_owned())
+    };
+
+    routes::shadowed(&conditions)
+        .into_iter()
+        .filter_map(|shadow| {
+            let origin = origins.get(shadow.later)?;
+            let (later, earlier) = (named[shadow.later].0, named[shadow.earlier].0);
+            // Across files the order is the order they merge in, which is
+            // the part nobody sees in either file.
+            let why = match (short(origins.get(shadow.earlier)), short(Some(origin))) {
+                (Some(first), Some(second)) if first != second => {
+                    format!(", because {first} merges before {second}")
+                }
+                _ => String::new(),
+            };
+            Some(Finding {
+                severity: Severity::Warning,
+                message: format!(
+                    "`{id}.{later}` can never match: `{id}.{earlier}` is tried first{why}, and its \
+                     condition holds whenever this one does",
+                ),
+                range: origin.range,
+                file: origin.file,
+            })
+        })
+        .collect()
+}
+
+/// A condition's VRL, when it is VRL: a bare string, or `type: vrl` with a
+/// `source` (`AnyCondition`, `src/conditions/mod.rs`).
+fn vrl_condition(condition: Option<&Value>) -> Option<&str> {
+    match condition? {
+        Value::Text(source) => Some(source),
+        map @ Value::Map(_) => match (map.get("type"), map.get("source")) {
+            (Some(Value::Text(kind)), Some(Value::Text(source))) if kind == "vrl" => Some(source),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// The lookups in every string of a component. See [`crate::lookups`] for why

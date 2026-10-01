@@ -25,6 +25,41 @@ export interface Flows {
   readonly to: string;
 }
 
+/** The output an `exclusive_route` sends what no route took to. Not a route. */
+const UNMATCHED = '_unmatched';
+
+/**
+ * The position each route of an `exclusive_route` is tried at, from 1.
+ *
+ * Its named outputs are its routes in the order Vector tries them — for a
+ * router written across files, the order the files merge in — followed by
+ * `_unmatched`, which is not tried but fallen through to. Empty for every
+ * other type: a plain `route` sends an event down every route that matches,
+ * so its routes have no order to speak of.
+ */
+export function evaluationOrder(component: {
+  readonly type: string;
+  readonly namedOutputs: readonly string[];
+}): Map<string, number> {
+  if (component.type !== 'exclusive_route') {
+    return new Map();
+  }
+  return new Map(
+    component.namedOutputs
+      .filter((output) => output !== UNMATCHED)
+      .map((output, index) => [output, index + 1]),
+  );
+}
+
+/**
+ * A route with its turn and the file that contributes it:
+ * `1. firewall-demo — 00-module-demo-firewall.toml`. The file is what
+ * explains the turn, when the routes come from several.
+ */
+export function routeLine(order: number, output: string, file: string): string {
+  return `${order}. ${output} — ${file.split('/').pop() ?? file}`;
+}
+
 /** An output as an input names it. `null` is the default output. */
 export function written(id: string, output: string | null): string {
   return output === null ? id : `${id}.${output}`;

@@ -101,6 +101,25 @@ source at the pin.
 - **A route opens at its own line.** Each named output already carried the
   file that added it; it now carries the line the route is written on, so
   clicking a route goes to its `name`, not to the top of the file's piece.
+- **An `exclusive_route`'s routes are numbered in the order they are tried.**
+  It takes the first route that matches, and across a config directory the
+  order is the order the files merge in — on the fixture
+  `1. firewall-demo — 00-module-demo-firewall.toml`,
+  `2. product_a — product_a.toml`, `3. product_b — product_b.yaml` — which no
+  single file shows. The sidebar numbers each route under its router and the
+  router's tooltip lists them with their files; an arrow's label says the
+  same. A plain `route` is not numbered: it sends an event down every route
+  that matches.
+- **A route an earlier one hides is a warning.** `.vendor == "acme"` tried
+  before `.vendor == "acme" && .kind == "fw"` leaves the second with nothing,
+  which `vector validate` accepts and `vector test` confirms (0.58.0: an event
+  matching both comes out of the first and never the second). The warning is
+  on the dead route and, when the two come from different files, says which
+  file merges first. It is decided only for conditions that are nothing but
+  `==` comparisons of paths and literals joined by `&&`, where every
+  comparison of the earlier route is among the later one's; anything else —
+  `||`, a function call, `!=`, parentheses, a non-VRL condition — is not read,
+  and nothing is said about it.
 
 ## 0.7.2 — 2026-09-28
 

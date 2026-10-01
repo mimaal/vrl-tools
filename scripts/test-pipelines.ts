@@ -28,7 +28,14 @@ import {
 } from '../editors/vscode/src/grouping.js';
 import type { Shape } from '../editors/vscode/src/grouping.js';
 import { markerEdit, takesComments } from '../editors/vscode/src/markers.js';
-import { consumers, destination, outputsOf, written } from '../editors/vscode/src/outputs.js';
+import {
+  consumers,
+  destination,
+  evaluationOrder,
+  outputsOf,
+  routeLine,
+  written,
+} from '../editors/vscode/src/outputs.js';
 import { candidates, countRows } from '../editors/vscode/src/tablefiles.js';
 import { errorsIn, pipeline, topology, topologyFiles } from './checker-harness.js';
 import type { PipelineTopology } from './checker-harness.js';
@@ -477,6 +484,77 @@ check(
     fleet.document.split('\n').filter((line) => / --> .*`$/.test(line)).length,
   ],
   [true, true, true, true, true, fleet.edges.length],
+);
+
+// The order an exclusive_route tries its routes in, with the file each comes
+// from: the overlay first, because its file merges first.
+const routeLines = (id: string): string[] => {
+  const component = fleet.components.find((entry) => entry.id === id) as
+    | { type: string; namedOutputs: string[]; outputOrigins: { file: number }[] }
+    | undefined;
+  return component
+    ? [...evaluationOrder(component)].map(([output, order]) =>
+        routeLine(
+          order,
+          output,
+          fleet.files[component.outputOrigins[component.namedOutputs.indexOf(output)]?.file ?? -1] ?? '',
+        ),
+      )
+    : [];
+};
+check(
+  'fleet/config: the routes are numbered in the order they are tried, each with its file',
+  [routeLines('route_by_product'), routeLines('normalize-router'), routeLines('time-diff')],
+  [
+    [
+      '1. firewall-demo — 00-module-demo-firewall.toml',
+      '2. product_a — product_a.toml',
+      '3. product_b — product_b.yaml',
+    ],
+    [
+      '1. firewall-demo — 00-module-demo-firewall.toml',
+      '2. imposible — normalize-router.toml',
+      '3. product_a — product_a.toml',
+      '4. product_b — product_b.yaml',
+    ],
+    [],
+  ],
+);
+
+// The mistake the order invites: an overlay named to sort first, with a
+// condition broader than a product's. Vector validates it and routes nothing
+// to the product; the graph says so, on the product's route.
+const overlaid = readWhole(
+  [
+    ...fleetFiles,
+    {
+      name: 'fleet/config/00-broad.toml',
+      source:
+        '[[transforms.normalize-router.routes]]\nname = "everything-from-a"\ncondition = \'.source == "a"\'\n',
+    },
+  ],
+  'fleet/config',
+  { terminalOutputs: ['*'] },
+);
+check(
+  'fleet/config: a broader route merged in ahead hides the narrower ones, and that is a warning',
+  overlaid.findings.map((finding) => [
+    finding.severity,
+    overlaid.files[(finding as { file?: number }).file ?? -1],
+    finding.message,
+  ]),
+  [
+    [
+      'warning',
+      'fleet/config/normalize-router.toml',
+      '`normalize-router.imposible` can never match: `normalize-router.everything-from-a` is tried first, because 00-broad.toml merges before normalize-router.toml, and its condition holds whenever this one does',
+    ],
+    [
+      'warning',
+      'fleet/config/product_a.toml',
+      '`normalize-router.product_a` can never match: `normalize-router.everything-from-a` is tried first, because 00-broad.toml merges before product_a.toml, and its condition holds whenever this one does',
+    ],
+  ],
 );
 
 // The three outputs that end on purpose, said the two ways they can be.

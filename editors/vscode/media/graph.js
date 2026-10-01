@@ -224,6 +224,23 @@
     return output ? `${id}.${output}` : id;
   }
 
+  /**
+   * The turn of a route of an `exclusive_route`, from 1: it takes the first
+   * route that matches, and its named outputs are its routes in the order it
+   * tries them, then `_unmatched`. Nothing for any other type, whose routes
+   * have no order.
+   *
+   * @param {any} component @param {string | null} output
+   * @returns {number | undefined}
+   */
+  function turnOf(component, output) {
+    if (component.type !== 'exclusive_route' || !output || output === '_unmatched') {
+      return undefined;
+    }
+    const index = component.namedOutputs.filter((/** @type {string} */ o) => o !== '_unmatched').indexOf(output);
+    return index < 0 ? undefined : index + 1;
+  }
+
   function reveal(range, file) {
     vscode.postMessage({ type: 'reveal', range, file });
   }
@@ -598,7 +615,17 @@
         // `cloudflare-waf` wants the file that added it.
         const origin = originOf(from.component, edge.output);
         const hint = el('title', {}, label);
-        hint.textContent = `${written(edge.from, edge.output)} → ${edge.to}\n${where(origin.file, origin.range)}\nClick to open where this output is added`;
+        // "1. firewall-demo — 00-module-demo-firewall.toml": the turn the
+        // route is tried at, and the file that puts it there.
+        const turn = turnOf(from.component, edge.output);
+        hint.textContent = [
+          `${written(edge.from, edge.output)} → ${edge.to}`,
+          turn === undefined
+            ? where(origin.file, origin.range)
+            : `${turn}. ${edge.output} — ${(files[origin.file] ?? '').split('/').pop()}, line ${origin.range.start.line + 1}`,
+          ...(turn === undefined ? [] : ['Tried in this order; the first route to match takes the event']),
+          'Click to open where this output is added',
+        ].join('\n');
         label.setAttribute('aria-label', `${written(edge.from, edge.output)} → ${edge.to}`);
         label.addEventListener('click', (event) => {
           event.stopPropagation();

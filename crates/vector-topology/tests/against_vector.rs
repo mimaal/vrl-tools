@@ -282,6 +282,28 @@ fn the_merge_is_still_vectors() {
     );
 }
 
+/// `src/routes.rs` calls a route dead when an earlier one always matches
+/// first. That is only true while an `exclusive_route` stops at the first
+/// route whose condition holds.
+#[test]
+fn an_exclusive_route_still_takes_the_first_match() {
+    let Some(root) = vector_source() else {
+        return;
+    };
+    let source = std::fs::read_to_string(root.join("src/transforms/exclusive_route/transform.rs"))
+        .expect("the transform reads");
+    let transform = source
+        .split("fn transform(")
+        .nth(1)
+        .expect("ExclusiveRoute still has a transform");
+
+    let tried = transform.find("for route in &self.routes").expect("it walks the routes in order");
+    let taken = transform.find("output.push(Some(&route.name), event);").expect("it emits to the route");
+    let stops = transform[taken..].find("return;").expect("and stops there");
+    let unmatched = transform.find("output.push(Some(UNMATCHED_ROUTE), event);").expect("or to _unmatched");
+    assert!(tried < taken && taken + stops < unmatched, "the first match no longer wins");
+}
+
 /// What `src/lookups.rs` and `src/tables.rs` take for granted about how a
 /// table is read: the two functions, the table as their first parameter and a
 /// compile-time constant, the three places a `remap` keeps its program, where

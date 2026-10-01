@@ -11,7 +11,7 @@ import type {
 import { mainPipeline } from './grouping';
 import { affectsPipeline, allPipelines, CONFIG_GLOB, sameFile } from './pipeline';
 import type { Pipeline, PipelineChoice } from './pipeline';
-import { consumers, destination, outputsOf, written } from './outputs';
+import { consumers, destination, evaluationOrder, outputsOf, routeLine, written } from './outputs';
 import { readPipeline, rowsOf } from './reading';
 import type { Counted } from './reading';
 import { describeTable } from './tablefiles';
@@ -629,6 +629,12 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
       [
         `**${component.id}** — ${component.role}, \`${component.type || 'no type'}\``,
         ...(files.length > 1 ? [`\n\n${files[component.file] ?? ''}`] : []),
+        // The order its routes are tried in, with the file each comes from:
+        // the first to match takes the event.
+        ...[...evaluationOrder(component)].map(
+          ([output, order]) =>
+            `\n\n${routeLine(order, output, files[originOf(component, output).file] ?? '')}`,
+        ),
         ...own.map((finding) => `\n\n- ${finding.severity}: ${finding.message}`),
       ].join(''),
     );
@@ -667,13 +673,22 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
 
     // The whole name, not the port: three routers each have a `_unmatched`,
     // and this is the string an input would be written with.
+    // An exclusive_route takes the first route that matches, so a route's
+    // turn is part of what it means; said first, since it is the order the
+    // rows are in.
+    const order = output === null ? undefined : evaluationOrder(component).get(output);
+    const tried =
+      order === undefined
+        ? ''
+        : ` Tried ${order} of ${evaluationOrder(component).size}, in the order the files merge.`;
+
     const ends = this.terminal(name);
     const fate = readers
       ? `Read by ${readers.join(', ')}.`
       : ends
         ? 'Nothing reads it, and it is marked as ending here on purpose.'
         : 'Nothing reads it.';
-    const item = new vscode.TreeItem(name);
+    const item = new vscode.TreeItem(order === undefined ? name : `${order}. ${name}`);
     item.description = `${destination(readers, ends)} · ${place}`;
     // An end that is meant is not a warning, and is not drawn as one.
     item.iconPath = readers
@@ -684,7 +699,7 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
     item.tooltip =
       output === null
         ? `The default output of \`${component.id}\`: what an input naming \`${component.id}\` reads. ${fate}`
-        : `Output \`${output}\` of \`${component.id}\`, added in ${files[origin.file] ?? 'this file'}. ${fate}`;
+        : `Output \`${output}\` of \`${component.id}\`, added in ${files[origin.file] ?? 'this file'}.${tried} ${fate}`;
     if (file) {
       item.command = {
         command: 'vscode.open',

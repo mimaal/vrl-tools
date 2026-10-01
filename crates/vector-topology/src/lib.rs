@@ -16,6 +16,7 @@ pub mod layout;
 pub mod lookups;
 pub mod outputs;
 pub mod render;
+pub mod routes;
 pub mod tables;
 mod terminal;
 mod vars;
@@ -1307,6 +1308,93 @@ inputs = [\"a\", \"ok\"]
         let stray = analysis.findings.iter().find(|f| f.message.contains("not on the line")).unwrap();
         let line = source.lines().position(|line| line == "# vrl-tools: terminal").unwrap();
         assert_eq!(stray.range.start.line as usize, line);
+    }
+
+    fn router(routes: &str) -> String {
+        format!(
+            "[sources.in]\ntype = \"stdin\"\n[transforms.r]\ntype = \"exclusive_route\"\ninputs = [\"in\"]\n\
+             {routes}[sinks.out]\ntype = \"console\"\ninputs = [\"r.*\"]\n"
+        )
+    }
+
+    /// The broader route first: the narrower one after it gets nothing, and
+    /// the warning is on the route that is dead.
+    #[test]
+    fn a_route_hidden_by_an_earlier_one_is_a_warning_at_the_hidden_route() {
+        let source = router(
+            "[[transforms.r.routes]]\nname = \"acme\"\ncondition = '.vendor == \"acme\"'\n\
+             [[transforms.r.routes]]\nname = \"acme-fw\"\ncondition = '.vendor == \"acme\" && .kind == \"fw\"'\n",
+        );
+        let analysis = analyse_files(&[file("vector.toml", &source)], "config");
+
+        assert_eq!(
+            messages(&analysis),
+            ["`r.acme-fw` can never match: `r.acme` is tried first, and its condition holds whenever this one does"],
+        );
+        assert_eq!(analysis.findings[0].severity, Severity::Warning);
+        let line = source.lines().position(|line| line == "name = \"acme-fw\"").unwrap();
+        assert_eq!(analysis.findings[0].range.start.line as usize, line);
+    }
+
+    /// Written the right way round, and for conditions the check does not
+    /// read, nothing is said.
+    #[test]
+    fn routes_in_a_working_order_and_conditions_not_read_say_nothing() {
+        for routes in [
+            "[[transforms.r.routes]]\nname = \"acme-fw\"\ncondition = '.vendor == \"acme\" && .kind == \"fw\"'\n\
+             [[transforms.r.routes]]\nname = \"acme\"\ncondition = '.vendor == \"acme\"'\n",
+            "[[transforms.r.routes]]\nname = \"a\"\ncondition = 'exists(.vendor)'\n\
+             [[transforms.r.routes]]\nname = \"b\"\ncondition = 'exists(.vendor) && .kind == \"fw\"'\n",
+            "[[transforms.r.routes]]\nname = \"a\"\ncondition = { type = \"is_log\" }\n\
+             [[transforms.r.routes]]\nname = \"b\"\ncondition = { type = \"is_log\" }\n",
+        ] {
+            let analysis = analyse_files(&[file("vector.toml", &router(routes))], "config");
+            assert!(analysis.findings.is_empty(), "{routes}: {:#?}", analysis.findings);
+        }
+    }
+
+    /// The `type: vrl` spelling of a condition is the same condition.
+    #[test]
+    fn a_fully_specified_vrl_condition_is_read_too() {
+        let analysis = analyse_files(
+            &[file(
+                "vector.yaml",
+                "sources:\n  in:\n    type: stdin\ntransforms:\n  r:\n    type: exclusive_route\n    inputs: [in]\n    routes:\n\
+                 \x20     - name: all\n        condition:\n          type: vrl\n          source: '.x == 1'\n\
+                 \x20     - name: some\n        condition: '.x == 1 && .y == 2'\n\
+                 sinks:\n  out:\n    type: console\n    inputs: ['r.*']\n",
+            )],
+            "config",
+        );
+        assert_eq!(analysis.findings.len(), 1, "{:#?}", analysis.findings);
+        assert!(analysis.findings[0].message.starts_with("`r.some` can never match: `r.all`"));
+    }
+
+    /// Across files the order is the files' — and that is what goes wrong:
+    /// an overlay named to sort first, with the broad condition.
+    #[test]
+    fn a_route_hidden_by_another_files_says_which_file_comes_first() {
+        let analysis = analyse_files(
+            &[
+                file("config/topology.toml", &router("")),
+                file(
+                    "config/product.toml",
+                    "[[transforms.r.routes]]\nname = \"fw\"\ncondition = '.kind == \"fw\" && .vendor == \"acme\"'\n",
+                ),
+                file(
+                    "config/00-overlay.toml",
+                    "[[transforms.r.routes]]\nname = \"overlay\"\ncondition = '.vendor == \"acme\"'\n",
+                ),
+            ],
+            "config",
+        );
+
+        assert_eq!(
+            messages(&analysis),
+            ["`r.fw` can never match: `r.overlay` is tried first, because 00-overlay.toml merges before \
+              product.toml, and its condition holds whenever this one does"],
+        );
+        assert_eq!(analysis.files[analysis.findings[0].file], "config/product.toml");
     }
 
     const LOOKUPS: &str = "[sources.in]\ntype = \"stdin\"\n\
