@@ -648,12 +648,14 @@ check(
 const tablesOf = (file: string): string[] =>
   file.startsWith('fleet/') ? fleet.tables.map((table) => table.id) : [];
 const programs = [
-  ...guessed.flatMap((file) =>
-    [
-      ...file.source.matchAll(/^\s*source\s*=\s*'''\n([\s\S]*?)'''/gm),
-      ...file.source.matchAll(/^(\s*)source:\s*\|\n((?:\1\s+.*\n?)+)/gm),
-    ].map((match) => ({ file: file.name, program: match[match.length - 1] })),
-  ),
+  ...guessed.flatMap((file) => {
+    // A checkout on Windows has CRLF where the same file has LF in CI.
+    const source = file.source.replaceAll('\r\n', '\n');
+    return [
+      ...source.matchAll(/^\s*source\s*=\s*'''\n([\s\S]*?)'''/gm),
+      ...source.matchAll(/^(\s*)source:\s*\|\n((?:\1\s+.*\n?)+)/gm),
+    ].map((match) => ({ file: file.name, program: match[match.length - 1] }));
+  }),
   ...all
     .filter((file) => file.name.endsWith('.vrl'))
     .map((file) => ({ file: file.name, program: file.source })),
