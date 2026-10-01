@@ -31,6 +31,7 @@ export interface Topology {
     readonly role: 'source' | 'transform' | 'sink' | 'table';
     readonly type: string;
     readonly namedOutputs: readonly string[];
+    readonly defaultOutput: boolean;
   }[];
   readonly tables: readonly {
     readonly id: string;

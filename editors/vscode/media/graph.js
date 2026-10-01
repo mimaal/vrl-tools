@@ -60,6 +60,7 @@
   const focusName = /** @type {HTMLElement} */ (document.getElementById('focus-name'));
   const details = /** @type {HTMLElement} */ (document.getElementById('details'));
   const tablesButton = /** @type {HTMLButtonElement} */ (document.getElementById('tables'));
+  const edgeList = /** @type {HTMLElement} */ (document.getElementById('edge-list'));
 
   /** @typedef {{edge: any, group: SVGGElement, label?: SVGGElement}} Drawn */
   /** @typedef {{x: number, y: number, component: any}} Placed */
@@ -206,6 +207,16 @@
     return component.outputOrigins?.[index] ?? { file: component.file, range: component.range };
   }
 
+  /**
+   * An output as an input names it: `id` for the default one, `id.port` for
+   * a named one. The only form that says whose `_unmatched` it is.
+   *
+   * @param {string} id @param {string | null} output
+   */
+  function written(id, output) {
+    return output ? `${id}.${output}` : id;
+  }
+
   function reveal(range, file) {
     vscode.postMessage({ type: 'reveal', range, file });
   }
@@ -270,7 +281,18 @@
     }
 
     const drawn = drawEdges([...edges, ...lookups], at, lanes);
-    const groups = drawNodes(at, findingsOf);
+    const read = new Set(edges.map((edge) => written(edge.from, edge.output)));
+    const groups = drawNodes(at, findingsOf, read);
+
+    // The same edges as text. The drawing is one image to a screen reader,
+    // and "errors" on an arrow says nothing without the box it leaves.
+    edgeList.replaceChildren(
+      ...edges.map((edge) => {
+        const item = document.createElement('li');
+        item.textContent = `${written(edge.from, edge.output)} → ${edge.to}`;
+        return item;
+      }),
+    );
 
     // The legend names only the roles on screen: most pipelines draw no table.
     const tableKey = document.querySelector('.legend .table');
@@ -474,9 +496,9 @@
       const path = /** @type {SVGPathElement} */ (
         el('path', { d, 'marker-end': looped ? 'url(#arrow-error)' : 'url(#arrow)' }, group)
       );
-      if (edge.lookup) {
-        el('title', {}, group).textContent = `${edge.to} looks up ${edge.from}`;
-      }
+      el('title', {}, group).textContent = edge.lookup
+        ? `${edge.to} looks up ${edge.from}`
+        : `${written(edge.from, edge.output)} → ${edge.to}`;
 
       /** @type {SVGGElement | undefined} */
       let label;
@@ -497,7 +519,8 @@
         // `cloudflare-waf` wants the file that added it.
         const origin = originOf(from.component, edge.output);
         const hint = el('title', {}, label);
-        hint.textContent = `${edge.from}.${edge.output} — ${where(origin.file, origin.range)}\nClick to open where this output is added`;
+        hint.textContent = `${written(edge.from, edge.output)} → ${edge.to}\n${where(origin.file, origin.range)}\nClick to open where this output is added`;
+        label.setAttribute('aria-label', `${written(edge.from, edge.output)} → ${edge.to}`);
         label.addEventListener('click', (event) => {
           event.stopPropagation();
           reveal(origin.range, origin.file);
@@ -575,9 +598,10 @@
   /**
    * @param {Map<string, Placed>} at
    * @param {Map<string, any[]>} findingsOf
+   * @param {Set<string>} read the outputs something reads, as written
    * @returns {Map<string, SVGGElement>}
    */
-  function drawNodes(at, findingsOf) {
+  function drawNodes(at, findingsOf, read) {
     /** @type {Map<string, SVGGElement>} */
     const groups = new Map();
 
@@ -634,6 +658,12 @@
       );
       fitText(big, id, NODE_W - 32);
 
+      // `dropped` with nobody reading it is a fact about this box, so it is
+      // written on the box. Read, it is an arrow like any other output.
+      if (component.namedOutputs.includes('dropped') && !read.has(written(id, 'dropped'))) {
+        portBadge(group, 'dropped', `${written(id, 'dropped')} — nothing reads it`);
+      }
+
       if (own.length > 0) {
         const worst = errors > 0 ? 'error' : warnings > 0 ? 'warning' : 'info';
         const badge = el('g', { class: `badge ${worst}` }, group);
@@ -667,6 +697,26 @@
       group.addEventListener('mouseleave', () => trace(selected));
     }
     return groups;
+  }
+
+  /**
+   * A small label on the bottom edge of a box, for an output that leaves it
+   * and goes nowhere.
+   *
+   * @param {SVGGElement} group @param {string} text @param {string} hint
+   */
+  function portBadge(group, text, hint) {
+    const badge = el('g', { class: 'port-badge' }, group);
+    el('title', {}, badge).textContent = hint;
+    const rect = el('rect', { height: 14, rx: 7, ry: 7, y: NODE_H - 7 }, badge);
+    const label = /** @type {SVGTextElement} */ (
+      el('text', { y: NODE_H, 'text-anchor': 'middle', 'dominant-baseline': 'central' }, badge)
+    );
+    label.textContent = text;
+    const width = label.getComputedTextLength() + 12;
+    rect.setAttribute('width', String(width));
+    rect.setAttribute('x', String(NODE_W - 12 - width));
+    label.setAttribute('x', String(NODE_W - 12 - width / 2));
   }
 
   // ------------------------------------------------------ paths and selection

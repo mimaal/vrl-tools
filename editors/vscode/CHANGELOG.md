@@ -43,6 +43,20 @@ source at the pin.
   `include_headers` is off. Paths are written for Vector's working directory,
   so the file is looked for from the config's directory upwards, and the
   tooltip names the file that was counted.
+- **An output is named whole: `component.output`.** An arrow labelled
+  `_unmatched` or `dropped` does not say whose, and the fixture has two routers
+  and three remaps that each have one. The Markdown export now writes
+  `route_by_product.product_a` on the Mermaid arrow and adds an **Edges** list
+  in the form the config itself uses — `` `normalize-router._unmatched -->
+  unmatched` `` — which can be searched and diffed. The graph keeps the short
+  label on the arrow, where the box it leaves is in sight, and says the whole
+  name in its tooltip and in a text list of the edges for screen readers, to
+  which the drawing was one unlabelled image. In the sidebar every output of
+  a component with several is a row under it with where it goes —
+  "→ time-diff", or "(unread)" — and a component with one output says it on
+  its own row.
+- **An unread `dropped` is a badge on the node.** It was only a line in the
+  problems list; read by something, it is still an arrow.
 
 ## 0.7.2 — 2026-09-28
 

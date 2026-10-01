@@ -11,6 +11,7 @@ import type {
 import { mainPipeline } from './grouping';
 import { affectsPipeline, allPipelines, CONFIG_GLOB, sameFile } from './pipeline';
 import type { Pipeline, PipelineChoice } from './pipeline';
+import { consumers, destination, outputsOf, written } from './outputs';
 import { readPipeline, rowsOf } from './reading';
 import type { Counted } from './reading';
 import { describeTable } from './tablefiles';
@@ -62,7 +63,12 @@ type Node =
   | { readonly kind: 'tableFile'; readonly file: number }
   | { readonly kind: 'table'; readonly table: TopologyTable }
   | { readonly kind: 'component'; readonly component: TopologyComponent }
-  | { readonly kind: 'output'; readonly component: TopologyComponent; readonly output: string }
+  /** One output of a component; `null` is its default one. */
+  | {
+      readonly kind: 'output';
+      readonly component: TopologyComponent;
+      readonly output: string | null;
+    }
   | { readonly kind: 'finding'; readonly finding: TopologyFinding };
 
 /** How each severity is drawn: the icon and its colour. */
@@ -86,6 +92,8 @@ interface Read {
    * that cannot change until the next read.
    */
   readonly findingsOf: ReadonlyMap<string, TopologyFinding[]>;
+  /** Who reads each output, by its written name. See `./outputs.ts`. */
+  readonly consumers: ReadonlyMap<string, string[]>;
 }
 
 /**
@@ -268,16 +276,19 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
         return this.tablesOf(analysis.tables.filter((table) => table.file === node.file));
       case 'table':
         return [];
-      // A router's outputs hang off it, each going to the file that added it
-      // — for a router written across files, not the one that declares it.
-      // Then the component's own problems, so a row with a badge can be
-      // opened to see what the badge is about without hunting for it in the
-      // list below.
+      // A component with more than one way out lists them, each saying who
+      // reads it and going to the file that added it — for a router written
+      // across files, not the one that declares it. One with a single output
+      // says where it goes on its own row instead. Then the component's own
+      // problems, so a row with a badge can be opened to see what the badge
+      // is about without hunting for it in the list below.
       case 'component':
         return [
-          ...node.component.namedOutputs.map(
-            (output): Node => ({ kind: 'output', component: node.component, output }),
-          ),
+          ...(node.component.namedOutputs.length > 0
+            ? outputsOf(node.component).map(
+                (output): Node => ({ kind: 'output', component: node.component, output }),
+              )
+            : []),
           ...this.findingsOf(node.component).map((finding): Node => ({ kind: 'finding', finding })),
         ];
       case 'output':
@@ -365,7 +376,12 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
       }
       const analysis = await readPipeline(this.checker, pipeline);
       this.rows = new Map();
-      return { pipeline, analysis, findingsOf: attachFindings(analysis) };
+      return {
+        pipeline,
+        analysis,
+        findingsOf: attachFindings(analysis),
+        consumers: consumers(analysis.edges),
+      };
     } catch (error) {
       this.output.appendLine(`Reading the pipeline for the sidebar failed: ${String(error)}`);
       return undefined;
@@ -581,13 +597,17 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
         : vscode.TreeItemCollapsibleState.None,
     );
 
-    // The type, and the outputs when there is more than one way out: that is
-    // the thing a list cannot show and the graph can, so it is worth a word.
-    const outputs =
-      component.namedOutputs.length > 0
-        ? ` · ${[...(component.defaultOutput ? ['(default)'] : []), ...component.namedOutputs].join(', ')}`
-        : '';
-    item.description = `${component.type || 'no type'}${outputs}`;
+    // The type, then where its events go: named outright when there is one
+    // way out, counted when there are several, since each then has a row of
+    // its own underneath. A sink, or a table, has nowhere to say.
+    const outputs = outputsOf(component);
+    const going =
+      outputs.length === 0
+        ? ''
+        : outputs.length === 1 && outputs[0] === null
+          ? ` ${destination(this.read?.consumers.get(component.id))}`
+          : ` · ${outputs.length} outputs`;
+    item.description = `${component.type || 'no type'}${going}`;
 
     item.iconPath = new vscode.ThemeIcon(
       role.icon,
@@ -626,18 +646,32 @@ class PipelineTree implements vscode.TreeDataProvider<Node>, vscode.Disposable {
    * `cloudflare_waf.toml`, and that is where somebody clicking the route wants
    * to be.
    */
-  private namedOutput(component: TopologyComponent, output: string): vscode.TreeItem {
+  private namedOutput(component: TopologyComponent, output: string | null): vscode.TreeItem {
     const files = this.read?.analysis.files ?? [];
-    const origin = originOf(component, output);
+    const origin =
+      output === null
+        ? { file: component.file, range: component.range }
+        : originOf(component, output);
     const file = this.read?.pipeline.files[origin.file];
-
-    const item = new vscode.TreeItem(`${component.id}.${output}`);
-    item.description =
+    const name = written(component.id, output);
+    const readers = this.read?.consumers.get(name);
+    const place =
       files.length > 1
         ? `${(files[origin.file] ?? '').split('/').pop() ?? ''}:${origin.range.start.line + 1}`
         : `line ${origin.range.start.line + 1}`;
-    item.iconPath = new vscode.ThemeIcon('arrow-right');
-    item.tooltip = `Output \`${output}\` of \`${component.id}\`, added in ${files[origin.file] ?? 'this file'}`;
+
+    // The whole name, not the port: three routers each have a `_unmatched`,
+    // and this is the string an input would be written with.
+    const item = new vscode.TreeItem(name);
+    item.description = `${destination(readers)} · ${place}`;
+    item.iconPath = new vscode.ThemeIcon(
+      readers ? 'arrow-right' : 'circle-slash',
+      readers ? undefined : new vscode.ThemeColor('list.warningForeground'),
+    );
+    item.tooltip =
+      output === null
+        ? `The default output of \`${component.id}\`: what an input naming \`${component.id}\` reads. ${readers ? `Read by ${readers.join(', ')}.` : 'Nothing reads it.'}`
+        : `Output \`${output}\` of \`${component.id}\`, added in ${files[origin.file] ?? 'this file'}. ${readers ? `Read by ${readers.join(', ')}.` : 'Nothing reads it.'}`;
     if (file) {
       item.command = {
         command: 'vscode.open',

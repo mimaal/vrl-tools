@@ -27,6 +27,7 @@ import {
   shapeOf,
 } from '../editors/vscode/src/grouping.js';
 import type { Shape } from '../editors/vscode/src/grouping.js';
+import { consumers, destination, outputsOf, written } from '../editors/vscode/src/outputs.js';
 import { candidates, countRows } from '../editors/vscode/src/tablefiles.js';
 import { errorsIn, pipeline, topology, topologyFiles } from './checker-harness.js';
 import type { PipelineTopology } from './checker-harness.js';
@@ -384,6 +385,46 @@ check(
     listed: narrowed.tables.length,
   },
   { tablesDrawn: ['threat_001'], listed: 372 },
+);
+
+// What the sidebar says under a router: every output by the name an input
+// uses for it, and who reads it.
+const readers = consumers(fleet.edges);
+const outputLines = (id: string): string[] => {
+  const component = fleet.components.find((entry) => entry.id === id);
+  return component
+    ? outputsOf(component).map(
+        (output) => `${written(id, output)} ${destination(readers.get(written(id, output)))}`,
+      )
+    : [];
+};
+check(
+  'fleet/config: each output of a router says where it goes, or that nothing reads it',
+  outputLines('normalize-router'),
+  [
+    'normalize-router.firewall-demo → time-diff',
+    'normalize-router.imposible (unread)',
+    'normalize-router.product_a → time-diff',
+    'normalize-router.product_b → time-diff',
+    'normalize-router._unmatched → unmatched',
+  ],
+);
+check(
+  'fleet/config: a default output is named by the component alone',
+  [destination(readers.get('time-diff')), destination(readers.get('dropped-handler'))],
+  ['→ out', '(unread)'],
+);
+check(
+  'fleet/config: the Markdown export still draws Mermaid, and lists the edges as `a.out --> b`',
+  [
+    fleet.document.includes('```mermaid\nflowchart LR\n'),
+    fleet.document.includes('-->|"route_by_product.product_a"| '),
+    fleet.document.includes('\n- `route_by_product.product_a --> product-a-normalizer`\n'),
+    fleet.document.includes('\n- `product-a-normalizer.dropped --> dropped-handler`\n'),
+    fleet.document.includes('\n- `time-diff --> out`\n'),
+    fleet.document.split('\n').filter((line) => / --> .*`$/.test(line)).length,
+  ],
+  [true, true, true, true, true, fleet.edges.length],
 );
 
 // ------------------------------------------------------------ the VRL in them

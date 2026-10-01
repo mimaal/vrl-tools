@@ -42,6 +42,7 @@ pub fn document_drawn(graph: &Graph, drawing: &Drawing, title: &str, files: &[St
         out.push_str("\n\n");
     }
     out.push_str(&diagram_drawn(graph, drawing));
+    out.push_str(&edges(graph));
 
     if !graph.findings.is_empty() {
         out.push_str(&problems(graph, files));
@@ -176,12 +177,13 @@ pub fn diagram_drawn(graph: &Graph, drawing: &Drawing) -> String {
 
         // The output is on the arrow, not in the node, because it is a
         // property of this particular path and the same transform usually has
-        // several.
+        // several. Written whole — `split.errors`, not `errors` — because a
+        // pipeline has more than one router and every one has a `_unmatched`.
         match &edge.output {
             Some(output) => out.push_str(&format!(
                 "  {} -->|\"{}\"| {}\n",
                 node_id(from),
-                escape(output),
+                escape(&format!("{}.{output}", edge.from)),
                 node_id(to),
             )),
             None => out.push_str(&format!("  {} --> {}\n", node_id(from), node_id(to))),
@@ -195,6 +197,25 @@ pub fn diagram_drawn(graph: &Graph, drawing: &Drawing) -> String {
     }
 
     out.push_str("```\n");
+    out
+}
+
+/// The edges as text, each output written the way an input names it:
+/// `` `split.errors --> alerts` ``. The diagram says the same thing, but a
+/// list can be searched, diffed and read aloud, and it is the form the config
+/// itself uses.
+fn edges(graph: &Graph) -> String {
+    if graph.edges.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::from("\n## Edges\n\n");
+    for edge in &graph.edges {
+        match &edge.output {
+            Some(output) => out.push_str(&format!("- `{}.{output} --> {}`\n", edge.from, edge.to)),
+            None => out.push_str(&format!("- `{} --> {}`\n", edge.from, edge.to)),
+        }
+    }
     out
 }
 
@@ -309,7 +330,37 @@ sinks:
 ",
         ));
 
-        assert!(text.contains("-->|\"errors\"| "), "{text}");
+        assert!(text.contains("-->|\"split.errors\"| "), "{text}");
+    }
+
+    /// The same edges as a list, which is what can be searched and read
+    /// aloud: every output by the name an input would use for it.
+    #[test]
+    fn the_document_lists_every_edge_by_its_written_output() {
+        let text = document(
+            &graph_of(
+                "
+sources:
+  app_logs:
+    type: file
+transforms:
+  split:
+    type: route
+    inputs: [app_logs]
+    route:
+      errors: 'true'
+sinks:
+  out:
+    type: console
+    inputs: [split.errors]
+",
+            ),
+            "vector.yaml",
+        );
+
+        assert!(text.contains("## Edges\n\n- `app_logs --> split`\n- `split.errors --> out`\n"), "{text}");
+        assert!(text.find("```mermaid") < text.find("## Edges"), "{text}");
+        assert!(text.find("## Edges") < text.find("## Problems"), "{text}");
     }
 
     /// A component name Mermaid would read as syntax has to stay in the label.

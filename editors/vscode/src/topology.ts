@@ -578,7 +578,7 @@ function html(webview: vscode.Webview, media: vscode.Uri): string {
   </header>
   <div id="banner" role="status"></div>
   <main>
-    <svg id="canvas" role="img" aria-label="Pipeline graph">
+    <svg id="canvas" role="img" aria-label="Pipeline graph" aria-describedby="edge-list">
       <defs>
         <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker>
         <marker id="arrow-active" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker>
@@ -586,6 +586,7 @@ function html(webview: vscode.Webview, media: vscode.Uri): string {
       </defs>
       <g id="viewport"><g id="edges"></g><g id="labels"></g><g id="nodes"></g></g>
     </svg>
+    <ul id="edge-list" class="sr-only" aria-label="Connections, each output by the name an input uses for it"></ul>
     <svg id="minimap" aria-hidden="true"></svg>
     <div id="hint"><span class="legend"><span class="source">source</span><span class="transform">transform</span><span class="sink">sink</span><span class="table">table</span></span><span>Scroll to move · Ctrl+scroll to zoom · Click a component to follow its paths</span></div>
     <div id="empty">No sources, transforms or sinks yet.<br>Components appear here as the config declares them.</div>

@@ -243,6 +243,37 @@ svg#canvas.panning {
   font-weight: 700;
 }
 
+/*
+ * An output nothing reads, said on the box it leaves. An arrow needs somewhere
+ * to go, and this one goes nowhere.
+ */
+.port-badge rect {
+  fill: var(--vscode-editor-background);
+  stroke: var(--warning);
+}
+
+.port-badge text {
+  fill: var(--warning);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 9.5px;
+}
+
+svg.overview .port-badge {
+  display: none;
+}
+
+/* The graph's edges as text, for a screen reader: the drawing has no order to read. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 /* ---------- edges ---------- */
 
 .edge path {
