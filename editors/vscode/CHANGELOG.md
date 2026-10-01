@@ -4,7 +4,7 @@ Versions before 0.5.0 were never published; they exist as tags and as `.vsix`
 files built locally. They are listed here because the history explains what the
 extension is.
 
-## Unreleased
+## 0.8.0 — 2026-10-01
 
 0.7.2 read the pipeline that exposed it correctly — 16 files given with
 `--config-dir`, 26 components events pass through, 54 edges, three warnings,
